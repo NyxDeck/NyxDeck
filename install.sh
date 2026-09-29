@@ -79,7 +79,9 @@ collect() {
 # a file from an earlier setup gets the layout corrected while keeping its colours.
 starship_wanted() {
     local src="$REPO_DIR/configs/starship.toml" dst="$CONFIG_HOME/starship.toml"
-    local layout palette
+    # Explicitly empty: `set -u` rejects an unset variable, and on a fresh box
+    # there is no live file to take the palette block from.
+    local layout="" palette=""
     layout="$(awk '/PALETTE >>>/{skip=1} /PALETTE <<</{skip=0; next} !skip' "$src")"
     if [ -f "$dst" ]; then
         # Keep the live block, normalised to the DMS markers and table name so
@@ -89,7 +91,7 @@ starship_wanted() {
                   -e 's|^# >>> .*PALETTE >>>$|# >>> DMS STARSHIP PALETTE >>>|' \
                   -e 's|^# <<< .*PALETTE <<<$|# <<< DMS STARSHIP PALETTE <<<|')"
     fi
-    [ -n "$palette" ] || palette="$(awk '/PALETTE >>>/{keep=1} keep{print} /PALETTE <<</{keep=0}' "$src")"
+    [ -n "${palette:-}" ] || palette="$(awk '/PALETTE >>>/{keep=1} keep{print} /PALETTE <<</{keep=0}' "$src")"
     # Command substitution eats the blank line the layout ends with, so put it
     # back: the palette block is separated from the layout by one empty line.
     printf '%s\n\n%s\n' "$layout" "$palette"
@@ -229,6 +231,19 @@ do_deploy() {
         fi
     fi
 
+    # Verify the result rather than trusting it: a missing include only shows up
+    # when the session starts.
+    if command -v niri >/dev/null 2>&1 && [ -f "$CONFIG_HOME/niri/config.kdl" ]; then
+        if niri validate -c "$CONFIG_HOME/niri/config.kdl" >/dev/null 2>&1; then
+            say "$(msg "  ✓ niri 配置校验通过" "  ✓ niri configuration validates")"
+        else
+            warn "$(msg "niri 配置校验失败：niri validate -c $CONFIG_HOME/niri/config.kdl" \
+                    "niri configuration failed validation: niri validate -c $CONFIG_HOME/niri/config.kdl")"
+        fi
+    fi
+
+    msg "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/" \
+        "Done. Previous files backed up to $BACKUP_ROOT/$STAMP/"
 }
 
 do_status() {

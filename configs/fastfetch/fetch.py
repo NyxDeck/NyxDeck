@@ -751,7 +751,7 @@ def run_native(palette: dict, install: bool) -> int:
         existing = target / "config.jsonc"
         if existing.is_file():
             shutil.copy2(existing, existing.with_suffix(f".jsonc.bak.{time.strftime('%Y%m%d_%H%M%S')}"))
-        (target / "config.jsonc").write_text(native_config(palette, target) + "\n", encoding="utf-8")
+        (target / "config.jsonc").write_text(native_config(palette) + "\n", encoding="utf-8")
         print(f"wrote {target / 'config.jsonc'}")
         return 0
     scratch = Path("/tmp") / f"nyxdeck-fetch-{os.getpid()}"
@@ -802,5 +802,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception:  # a shell greeting must never break the shell
+    except Exception as exc:  # a shell greeting must never break the shell,
+        print(f"nyxdeck fetch: {exc}", file=sys.stderr)  # but never silently
         sys.exit(0)
