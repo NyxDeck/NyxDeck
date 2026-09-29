@@ -51,6 +51,31 @@ msg() { # msg "<中文>" "<English>"
     if [ "$LANG_CODE" = zh ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi
 }
 
+# Remove the line this repository appends to a shell rc file, marker and all.
+strip_rc_hook() { # $1 = rc file
+    local rc="$1"
+    [ -f "$rc" ] || return 0
+    grep -q "nyxdeck/nyxdeck.sh" "$rc" 2>/dev/null || return 0
+    awk '!/# NyxDeck shell layer/ && !/nyxdeck\/nyxdeck\.sh/' "$rc" > "$rc.tmp.$$" && mv "$rc.tmp.$$" "$rc"
+    say "  - $rc（$(msg "NyxDeck 钩子" "NyxDeck hook")）"
+}
+
+# Directories that only held files this repository deployed. rmdir refuses
+# non-empty ones, so machine state such as fish_variables or DMS' settings stays.
+prune_empty_dirs() {
+    local app
+    for app in "${APPS[@]}"; do
+        [ -d "$CONFIG_HOME/$app" ] || continue
+        find "$CONFIG_HOME/$app" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+        # if/fi rather than `&&`: a non-empty directory is the normal case here,
+        # and a failing last command would take the whole script down with -e.
+        if rmdir "$CONFIG_HOME/$app" 2>/dev/null; then
+            say "  - $CONFIG_HOME/$app"
+        fi
+    done
+    return 0
+}
+
 is_preserved() {
     local key="$1" p
     for p in "${PRESERVE[@]}"; do [ "$key" = "$p" ] && return 0; done
@@ -282,6 +307,13 @@ do_uninstall() {
             msg "回到首次部署前的配置状态（快照 $oldest）：" \
                 "Restoring the configuration from before the first deploy (snapshot $oldest):"
             do_rollback "$oldest"
+            # The snapshot only covers managed files, so the shell layer is
+            # judged by what it says: no nyxdeck.sh in it means the hook was
+            # not in the rc files yet either.
+            if [ ! -e "$SNAP_ROOT/$oldest/nyxdeck/nyxdeck.sh" ]; then
+                strip_rc_hook "$HOME/.bashrc"
+                strip_rc_hook "$HOME/.zshrc"
+            fi
             return 0
             ;;
     esac
@@ -318,13 +350,9 @@ do_uninstall() {
             fi
         done
         # The rc hooks this repository appended.
-        local rc
-        for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-            [ -f "$rc" ] || continue
-            grep -q "nyxdeck/nyxdeck.sh" "$rc" 2>/dev/null || continue
-            awk '!/# NyxDeck shell layer/ && !/nyxdeck\/nyxdeck\.sh/' "$rc" > "$rc.tmp.$$" && mv "$rc.tmp.$$" "$rc"
-            say "  - $rc（NyxDeck 钩子）"
-        done
+        strip_rc_hook "$HOME/.bashrc"
+        strip_rc_hook "$HOME/.zshrc"
+        prune_empty_dirs
         msg "已彻底清除（mihomo 服务/内核请用 nyxdeck mihomo uninstall --purge）" \
             "Purged (use nyxdeck mihomo uninstall --purge for the mihomo unit)"
         return 0
@@ -409,6 +437,18 @@ do_rollback() {
         cp -a "$src/$key" "$dst" 2>/dev/null || cp -p "$src/$key" "$dst"
         say "  ~ $dst"
     done < <(collect)
+    # A snapshot only holds what existed when it was taken. Files the deploy
+    # added afterwards are not in it, so restoring the contents alone would
+    # leave a machine that never existed. Preserved files are the user's.
+    while IFS=$'\t' read -r key f dst; do
+        is_preserved "$key" && continue
+        [ -e "$src/$key" ] && continue
+        if [ -e "$dst" ]; then
+            say "  - $dst"
+            rm -f "$dst"
+        fi
+    done < <(collect)
+    prune_empty_dirs
     prune_snapshots
     msg "已回滚到 $target（回滚前的状态存为 $(basename "$undo")）" \
         "Rolled back to $target (previous state saved as $(basename "$undo"))"
