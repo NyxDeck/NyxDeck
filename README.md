@@ -145,7 +145,7 @@ the machine data.
 Nothing is hard-coded, so the panel changes with the wallpaper like the bar,
 the terminal and starship do.
 
-A `rice  NyxDeck` row credits the desktop, the same slot NyxDeck used. Section
+A `rice  NyxDeck` row credits the desktop. Section
 labels carry no background block, which would read as a halo on a translucent
 terminal.
 
@@ -206,7 +206,7 @@ layout is NyxDeck's, and the `# >>> DMS STARSHIP PALETTE >>>` block inside it
 belongs to DMS's matugen, which rewrites it on every theme change. Deployment
 therefore **merges** rather than seeding: it takes the layout from this
 repository and keeps the palette block from the machine (normalising its markers
-and table name to `dms`), so a box that still carries a Noctalia-era
+and table name to `dms`), so a box that still carries a file from an earlier
 `starship.toml` gets the layout corrected while keeping its colours. Deploying
 is idempotent once the two agree.
 
@@ -236,6 +236,23 @@ the state it is about to replace, so a rollback can itself be rolled back.
 Tighter than that, each deploy still records only the files it changed under
 `~/.config/.nyxdeck-backup`.
 
+### Scope
+
+The lifecycle is complete — install, update, verify, snapshot, roll back,
+uninstall — and the list of what this repository deliberately leaves to
+something else is short:
+
+- **theming**: DMS's matugen generates the palette and the per-app templates;
+- **the display manager and the input method**: installing those is a system
+  decision rather than a configuration one;
+- **an app store, per-app configuration presets, diagnostic report bundles and
+  self-tests**: useful tools, but not part of deploying this desktop.
+
+Beyond configuration this repository owns: categorised DMS plugin management,
+the Mihomo TUN chain with its local dashboard, the terminal welcome panel, the
+logo and tagline theming, the desktop-widget toggles, and a shell layer that
+covers bash and zsh as well as fish.
+
 ### Shell layer
 
 NyxDeck owns the shell configuration:
@@ -253,8 +270,7 @@ Anything personal belongs in `conf.d/__custom__.fish` or a `__custom__/` directo
 next to it; `config.fish` itself is refreshed so the shell layer can actually
 evolve. Fisher plugins stay user-managed and are never touched.
 
-`nyxdeck shell status` reports each file, `nyxdeck shell doctor` also flags
-`nyxdeck shell doctor` also checks what the layer needs (starship, the hooks,
+`nyxdeck shell status` reports each file, `nyxdeck shell doctor` also checks what the layer needs (starship, the hooks,
 the fisher plugins), `shell install` re-deploys and `shell edit` opens the private file.
 
 `nyxdeck help` is generated rather than hand-written: the command list comes
@@ -297,7 +313,8 @@ sudo pacman -S cava
 **NyxRings** is a separate plugin, open-sourced at
 [github.com/NyxDeck/nyxRings](https://github.com/NyxDeck/nyxRings); this
 repository does not vendor it. It is a fully transparent desktop widget
-rendering a port of Noctalia's *wave_rings* effect: concentric rings and a
+rendering the *wave_rings* effect (the shader is a port; its upstream
+notice lives in the plugin's `LICENSE`): concentric rings and a
 polar spectrum around an empty centre, driven by cava. Install it into DMS's
 plugin directory and restart:
 

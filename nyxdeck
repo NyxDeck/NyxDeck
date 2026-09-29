@@ -35,10 +35,19 @@ LOGO_FILE = CONFIG_HOME / "nyxdeck" / "logo"
 VERSION = "0.1.0"
 
 # Packages NyxDeck needs at runtime.
-# Packages NyxDeck needs at runtime. fastfetch/starship are what the
-# terminal layer (panel, prompt) is built on; fzf only makes the pickers
-# nicer and stays optional.
-CORE_DEPS = ["cava", "matugen", "qt6ct", "wtype", "fastfetch", "starship"]
+# What a NyxDeck box needs: the compositor and the shell, the terminal layer this
+# repository configures, and what our own scripts call. Names are checked with pacman, not by looking for a
+# command, because several are libraries or fonts.
+CORE_DEPS = [
+    "niri", "dms-shell",
+    "kitty", "fish", "starship", "fastfetch",
+    "matugen", "cava", "qt6ct", "wtype",
+    "fzf", "wlsunset", "mpvpaper", "ffmpeg", "jq", "eza",
+    "python-gobject", "gtk-layer-shell",
+    "ttf-jetbrains-mono-nerd", "noto-fonts-cjk",
+]
+# Handy but not required; `nyxdeck deps --optional`.
+OPTIONAL_DEPS = ["tmux", "inotify-tools", "ffmpegthumbnailer", "grim", "slurp", "wl-clipboard"]
 
 # Plugins installed by cloning a repository. Other ids go through
 # `dms plugins install` (the registry).
@@ -319,11 +328,35 @@ def cmd_doctor(_: list[str]) -> int:
     say(t("NyxDeck 体检", "NyxDeck doctor"))
 
     say("\n" + t("依赖", "Dependencies"))
-    for pkg in CORE_DEPS:
-        if have(pkg):
-            ok(pkg)
+    missing = [pkg for pkg in CORE_DEPS if not _pkg_installed(pkg)]
+    if missing:
+        for pkg in missing:
+            err(f"{pkg}")
+        warn(t("运行 nyxdeck deps（或 nyxdeck deps --pick 挑着装）",
+               "run nyxdeck deps (or nyxdeck deps --pick to choose)"))
+    else:
+        ok(t(f"{len(CORE_DEPS)} 个核心依赖齐了", f"all {len(CORE_DEPS)} core dependencies present"))
+
+    say("\n" + t("桌面工具", "Desktop tooling"))
+    for tool, why in (
+        ("mpvpaper", t("动态壁纸", "live wallpapers")),
+        ("ffmpegthumbnailer", t("视频壁纸缩略图", "video wallpaper thumbnails")),
+        ("wlsunset", t("护眼暖色温", "eye-care colour temperature")),
+    ):
+        if have(tool):
+            ok(f"{tool}  ·  {why}")
         else:
-            err(f"{pkg}  ({t('运行 nyxdeck deps', 'run nyxdeck deps')})")
+            warn(f"{tool}  ·  {why}  ({t('nyxdeck deps --optional', 'nyxdeck deps --optional')})")
+
+    if have("fish"):
+        want, got, missing_plugins = _fisher_state()
+        if want == 0:
+            pass
+        elif not missing_plugins:
+            ok(t(f"fisher 插件 {got}/{want} 就位", f"fisher plugins {got}/{want}"))
+        else:
+            warn(t(f"fisher 插件缺：{', '.join(missing_plugins)}（nyxdeck shell install 会补齐）",
+                   f"fisher plugins missing: {', '.join(missing_plugins)} (nyxdeck shell install fixes that)"))
 
     say("\n" + t("桌面会话", "Desktop"))
     if have("dms"):
@@ -369,9 +402,6 @@ def cmd_doctor(_: list[str]) -> int:
             ok(relative)
         else:
             warn(f"{relative}  —  {detail}")
-    for path, label in _leftovers():
-        warn(t(f"遗留：{path}（{label}）", f"leftover: {path} ({label})"))
-
     if not have("fzf"):
         warn(t("fzf 未安装（Logo / 标语选择器会退化为逐项菜单，可选）",
                "fzf is not installed (the logo/tagline pickers fall back to plain menus; optional)"))
@@ -381,9 +411,93 @@ def cmd_doctor(_: list[str]) -> int:
     return 0
 
 
+def _pkg_installed(package: str) -> bool:
+    """Ask pacman; a command check would miss libraries, fonts and shells."""
+    if not have("pacman"):
+        return have(package)
+    return subprocess.run(["pacman", "-Qq", package], capture_output=True, check=False).returncode == 0
+
+
+def _pkg_source(package: str) -> str:
+    """'repo' or 'aur' — the latter needs an AUR helper."""
+    if not have("pacman"):
+        return "unknown"
+    probe = subprocess.run(["pacman", "-Si", package], capture_output=True, check=False)
+    return "repo" if probe.returncode == 0 else "aur"
+
+
+def _aur_helper() -> str:
+    for helper in ("paru", "yay"):
+        if have(helper):
+            return helper
+    return ""
+
+
+# Plugin -> a function it installs. `fisher list` prints nothing outside a tty,
+# so ask fish directly whether each plugin's marker function is there.
+FISHER_MARKERS = {
+    "jorgebucaran/fisher": "fisher",
+    "jorgebucaran/autopair.fish": "_autopair_backspace",
+    "PatrickF1/fzf.fish": "fzf_configure_bindings",
+}
+
+
+def _fisher_state() -> tuple[int, int, list[str]]:
+    """(declared, present, missing plugin names)."""
+    declared_file = CONFIG_HOME / "fish" / "fish_plugins"
+    if not declared_file.is_file():
+        return 0, 0, []
+    declared = [line.strip() for line in declared_file.read_text().splitlines() if line.strip()]
+    present, missing = 0, []
+    for entry in declared:
+        name = entry.split("@")[0]
+        marker = FISHER_MARKERS.get(name)
+        if not marker:
+            present += 1          # unknown plugin: assume whoever declared it knows
+            continue
+        res = subprocess.run(["fish", "-c", f"functions -q {marker}"], capture_output=True, check=False)
+        if res.returncode == 0:
+            present += 1
+        else:
+            missing.append(name)
+    return len(declared), present, missing
+
+
+def _pick_packages(packages: list[str]) -> list[str] | None:
+    """Multi-select over the missing packages, with the package info as preview."""
+    if not packages:
+        ok(t("依赖都已安装。", "All dependencies are installed."))
+        return None
+    if not have("fzf"):
+        warn(t("没装 fzf，按全部处理", "fzf is missing; taking all of them"))
+        return packages
+    header = t(f"{len(packages)} 个待安装   ·   Tab 多选   ·   Enter 安装   ·   Esc 取消",
+               f"{len(packages)} to install   ·   Tab to select   ·   Enter installs   ·   Esc cancels")
+    res = _fzf([
+        "--multi", "--height=100%", "--prompt=deps> ", "--pointer=› ",
+        "--header", header, "--info=inline-right",
+        "--preview", "pacman -Si {} 2>/dev/null || paru -Si {} 2>/dev/null || echo (AUR)",
+        "--preview-window", "right:60%,noborder",
+    ], packages)
+    if res.returncode != 0 or not res.stdout.strip():
+        say(t("已取消", "cancelled"))
+        return []
+    return [line.split()[-1] for line in res.stdout.splitlines() if line.strip()]
+
+
 def cmd_deps(argv: list[str]) -> int:
     check_only = "--check" in argv
-    missing = [p for p in CORE_DEPS if not have(p)]
+    pick = "--pick" in argv
+    pool = list(CORE_DEPS)
+    if "--optional" in argv or "--all" in argv:
+        pool += OPTIONAL_DEPS
+
+    missing = [p for p in pool if not _pkg_installed(p)]
+    if pick:
+        chosen = _pick_packages(missing)
+        if chosen is None:
+            return 0
+        missing = chosen
     if not missing:
         say(t("核心依赖都已安装。", "All core dependencies are installed."))
         return 0
@@ -393,8 +507,24 @@ def cmd_deps(argv: list[str]) -> int:
     if not have("pacman"):
         err(t("未找到 pacman；请手动安装：", "pacman not found; install manually: ") + " ".join(missing))
         return 1
-    say(t("正在安装：", "Installing: ") + " ".join(missing))
-    return subprocess.run(["sudo", "pacman", "-S", "--needed", *missing]).returncode
+
+    # Official repositories first, then whatever only exists in the AUR.
+    repo = [p for p in missing if _pkg_source(p) == "repo"]
+    aur = [p for p in missing if _pkg_source(p) == "aur"]
+    status = 0
+    if repo:
+        say(t("安装官方仓库包：", "Installing from the repositories: ") + " ".join(repo))
+        status |= subprocess.run(["sudo", "pacman", "-S", "--needed", *repo]).returncode
+    if aur:
+        helper = _aur_helper()
+        if helper:
+            say(t(f"安装 AUR 包（{helper}）：", f"Installing from the AUR ({helper}): ") + " ".join(aur))
+            status |= subprocess.run([helper, "-S", "--needed", *aur]).returncode
+        else:
+            warn(t("这些包只在 AUR，需要一个 AUR helper（paru/yay）：",
+                   "these only exist in the AUR and need an AUR helper (paru/yay): ") + " ".join(aur))
+            status = 1
+    return status
 
 
 def _install_repo_plugin(plugin: str, url: str, force: bool = False) -> int:
@@ -1224,7 +1354,7 @@ def pick_tagline() -> int:
 
 # ── Shell layer ──────────────────────────────────────────────────────────────
 # The shell layer this repository owns: what it deploys and how to tell it is
-# NyxDeck's, plus the leftovers worth reporting.
+# in place.
 
 SHELL_DIR = CONFIG_HOME / "fish"
 SHELL_CONF_D = SHELL_DIR / "conf.d"
@@ -1246,15 +1376,6 @@ SHELL_FILES = [
     ("starship.toml", t("提示符布局（布局属我们，调色板归 matugen）",
                         "prompt layout (ours; the palette block is matugen's)")),
 ]
-
-# Legacy entries worth reporting.
-LEFTOVERS = [
-    (CONFIG_HOME / "fish/conf.d/nyxdeck-path.fish", t("PATH 钩子", "PATH hook")),
-    (CONFIG_HOME / "noctalia", t("Noctalia 配置目录", "Noctalia configuration directory")),
-    (CONFIG_HOME / "niri/scripts/start-noctalia.sh", t("启动 Noctalia 的脚本", "Noctalia launcher script")),
-    (STATE_HOME / "noctalia", t("Noctalia 状态目录", "Noctalia state directory")),
-]
-
 
 def _shell_state(relative: str) -> tuple[str, str]:
     """(state, detail) for a file this repository owns."""
@@ -1285,13 +1406,6 @@ def _same_content(src: Path, dst: Path) -> bool:
     return a == b
 
 
-def _leftovers() -> list[tuple[Path, str]]:
-    found = [(path, label) for path, label in LEFTOVERS if path.exists()]
-    found += [(path, t("旧的 niri 配置备份", "old niri configuration backup"))
-              for path in sorted(CONFIG_HOME.glob("niri.bak-*"))]
-    return found
-
-
 def cmd_shell(argv: list[str]) -> int:
     action = argv[0] if argv else "status"
 
@@ -1302,11 +1416,6 @@ def cmd_shell(argv: list[str]) -> int:
             line = f"{relative}  —  {detail}"
             {"ok": ok, "drift": warn, "missing": warn}.get(state, warn)(line)
             say(f"      {label}")
-        leftovers = _leftovers()
-        if leftovers:
-            say("")
-            warn(t(f"遗留 {len(leftovers)} 项（nyxdeck shell doctor 查看）",
-                   f"{len(leftovers)} legacy leftovers (see nyxdeck shell doctor)"))
         return 0
 
     if action == "doctor":
@@ -1332,13 +1441,15 @@ def cmd_shell(argv: list[str]) -> int:
             warn(t("config.fish 还是旧版本（跑 nyxdeck shell install）",
                    "config.fish is not the NyxDeck version (run nyxdeck shell install)"))
             problems += 1
-        plugins = (SHELL_DIR / "fish_plugins")
-        if plugins.is_file():
-            ok(t(f"fisher 插件声明 {len(plugins.read_text().split())} 个",
-                 f"{len(plugins.read_text().split())} fisher plugins declared"))
-        for path, label in _leftovers():
-            warn(t(f"遗留：{path}（{label}）", f"leftover: {path} ({label})"))
-            problems += 1
+        if have("fish"):
+            want, got, missing_plugins = _fisher_state()
+            if want == 0:
+                pass
+            elif not missing_plugins:
+                ok(t(f"fisher 插件 {got}/{want} 就位", f"fisher plugins {got}/{want}"))
+            else:
+                warn(t(f"fisher 插件缺：{', '.join(missing_plugins)}",
+                       f"fisher plugins missing: {', '.join(missing_plugins)}"))
         say("")
         if problems == 0:
             ok(t("shell 层干净", "shell layer is clean"))
@@ -1605,7 +1716,7 @@ def shell_menu() -> None:
     while True:
         items = [
             t("状态（每份文件的部署情况）", "status (deployment state of each file)"),
-            t("体检（含 遗留检查）", "doctor (including leftovers from earlier setups)"),
+            t("体检", "doctor"),
             t("部署 shell 层", "deploy the shell layer"),
             t("编辑私有配置 __custom__.fish", "edit the private __custom__.fish"),
             t("返回", "Back"),

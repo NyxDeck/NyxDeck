@@ -113,7 +113,7 @@ def pad_left(string: str, width: int) -> str:
 # ── the mark ─────────────────────────────────────────────────────────────────
 # fastfetch ships hand-drawn per-distribution ASCII art and picks it from
 # /etc/os-release. We use that art — it looks as deliberate as the distro's own —
-# looks as deliberate as the distro's own) and colour it from the DMS palette
+# and colour it from the DMS palette
 # instead of a hard-coded ANSI colour. fastfetch drops colour when stdout is a
 # pipe, hence the pty capture.
 

@@ -76,7 +76,7 @@ collect() {
 # block between the markers belongs to DMS's matugen, which rewrites it on every
 # theme change. Deploying therefore merges — repo layout, live palette — instead
 # of treating the whole file as seed-if-absent, so a machine that still carries
-# a Noctalia-era file gets the layout corrected while keeping its colours.
+# a file from an earlier setup gets the layout corrected while keeping its colours.
 starship_wanted() {
     local src="$REPO_DIR/configs/starship.toml" dst="$CONFIG_HOME/starship.toml"
     local layout palette
@@ -160,7 +160,7 @@ do_deploy() {
             continue
         fi
         # --remove-destination so a managed path that is currently a symlink
-        # (e.g. kitty/current-theme.conf -> themes/noctalia.conf) is replaced
+        # (e.g. a theme file that is a symlink) is replaced
         # by the file itself, instead of writing through the link.
         cp --remove-destination -p "$f" "$dst"
         # DMS only substitutes SHELL_DIR/CONFIG_DIR in its own templates; the
@@ -203,16 +203,32 @@ do_deploy() {
         say "  + $rc (NyxDeck hook)"
     done
 
-    # One-off: a stale hook from an earlier setup.
-    local stale="$CONFIG_HOME/fish/conf.d/nyxdeck-path.fish"
-    if [ -e "$stale" ]; then
-        mkdir -p "$BACKUP_ROOT/$STAMP/fish/conf.d"
-        cp -p "$stale" "$BACKUP_ROOT/$STAMP/fish/conf.d/" 2>/dev/null || true
-        rm -f "$stale"
-        say "  - $stale (legacy leftover, replaced by nyxdeck-path.fish)"
+    # Fisher plugins: fish_plugins declares what the shell layer needs (autopair,
+    # fzf bindings). `fisher list` prints nothing outside a tty, so probe each
+    # plugin's marker function and let fisher fill in what is missing.
+    if [ -f "$CONFIG_HOME/fish/fish_plugins" ] && command -v fish >/dev/null 2>&1; then
+        local need=0 marker line
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "${line%%@*}" in
+                jorgebucaran/fisher)        marker=fisher ;;
+                jorgebucaran/autopair.fish) marker=_autopair_backspace ;;
+                PatrickF1/fzf.fish)         marker=fzf_configure_bindings ;;
+                *)                          continue ;;
+            esac
+            fish -c "functions -q $marker" 2>/dev/null || need=1
+        done < "$CONFIG_HOME/fish/fish_plugins"
+        if [ "$need" -eq 1 ]; then
+            if fish -c 'functions -q fisher' 2>/dev/null; then
+                say "  ~ fisher 插件不全，运行 fisher update" "  ~ fisher plugins incomplete, running fisher update"
+                fish -c 'fisher update' 2>&1 | sed 's/^/      /' || warn "$(msg "fisher update 失败（离线？）" "fisher update failed (offline?)")"
+            else
+                warn "$(msg "缺少 fisher 插件但没装 fisher（fish 里跑 fisher install jorgebucaran/fisher）" \
+                        "fisher plugins are declared but fisher is not installed")"
+            fi
+        fi
     fi
 
-    msg "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/" "Done. Previous files backed up to $BACKUP_ROOT/$STAMP/"
 }
 
 do_status() {
@@ -227,6 +243,21 @@ do_status() {
 }
 
 do_uninstall() {
+    local mode="${1:-}"
+
+    case "$mode" in
+        --restore|restore)
+            # The oldest snapshot is the state before the first deploy.
+            local oldest=""
+            [ -d "$SNAP_ROOT" ] && oldest="$(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | head -1)"
+            [ -n "$oldest" ] || { warn "$(msg "没有快照可回滚" "no snapshot to restore from")"; return 0; }
+            msg "回到首次部署前的配置状态（快照 $oldest）：" \
+                "Restoring the configuration from before the first deploy (snapshot $oldest):"
+            do_rollback "$oldest"
+            return 0
+            ;;
+    esac
+
     msg "移除 NyxDeck 部署的文件（机器状态与 DMS 运行时文件保留）：" \
         "Removing files deployed by NyxDeck (machine state and DMS runtime files are kept):"
     local key f dst
@@ -242,7 +273,37 @@ do_uninstall() {
         rm -f "$link"
         say "  - $link"
     fi
-    msg "完成。" "Done."
+
+    if [ "$mode" = "--purge" ] || [ "$mode" = "purge" ]; then
+        msg "彻底清除（配置、快照、备份、插件、shell 钩子）：" \
+            "Purging (settings, snapshots, backups, plugins, shell hooks):"
+        rm -rf "$SNAP_ROOT" "$BACKUP_ROOT"
+        say "  - $SNAP_ROOT"
+        say "  - $BACKUP_ROOT"
+        rm -rf "$CONFIG_HOME/nyxdeck"
+        say "  - $CONFIG_HOME/nyxdeck（语言/标语/Logo 等设置）"
+        local plugin
+        for plugin in nyxRings mihomoTun; do
+            if [ -d "$CONFIG_HOME/DankMaterialShell/plugins/$plugin" ]; then
+                rm -rf "$CONFIG_HOME/DankMaterialShell/plugins/$plugin"
+                say "  - $CONFIG_HOME/DankMaterialShell/plugins/$plugin"
+            fi
+        done
+        # The rc hooks this repository appended.
+        local rc
+        for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+            [ -f "$rc" ] || continue
+            grep -q "nyxdeck/nyxdeck.sh" "$rc" 2>/dev/null || continue
+            awk '!/# NyxDeck shell layer/ && !/nyxdeck\/nyxdeck\.sh/' "$rc" > "$rc.tmp.$$" && mv "$rc.tmp.$$" "$rc"
+            say "  - $rc（NyxDeck 钩子）"
+        done
+        msg "已彻底清除（mihomo 服务/内核请用 nyxdeck mihomo uninstall --purge）" \
+            "Purged (use nyxdeck mihomo uninstall --purge for the mihomo unit)"
+        return 0
+    fi
+
+    msg "完成。（--restore 回到首次部署前，--purge 连设置一起清）" \
+        "Done. (--restore returns to the pre-deploy state, --purge also clears settings)"
 }
 
 # ── snapshots ────────────────────────────────────────────────────────────────
@@ -328,10 +389,10 @@ do_rollback() {
 case "${1:-install}" in
     install)   do_deploy ;;
     status)    do_status ;;
-    uninstall) do_uninstall ;;
+    uninstall) do_uninstall "${2:-}" ;;
     snapshot)  do_snapshot "${2:-}" ;;
     snapshots) do_snapshots ;;
     rollback)  do_rollback "${2:-1}" ;;
-    *)         die "$(msg "用法: $0 [install|status|uninstall|snapshot [备注]|snapshots|rollback [序号]]" \
-                    "usage: $0 [install|status|uninstall|snapshot [note]|snapshots|rollback [index]]")" ;;
+    *)         die "$(msg "用法: $0 [install|status|uninstall [--restore|--purge]|snapshot [备注]|snapshots|rollback [序号]]" \
+                    "usage: $0 [install|status|uninstall [--restore|--purge]|snapshot [note]|snapshots|rollback [index]]")" ;;
 esac
