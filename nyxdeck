@@ -54,6 +54,7 @@ OPTIONAL_DEPS = ["tmux", "inotify-tools", "ffmpegthumbnailer", "grim", "slurp", 
 PLUGIN_REPOS = {
     "nyxRings": "https://github.com/NyxDeck/nyxRings.git",
     "mihomoTun": "https://github.com/NyxDeck/mihomo-tun.git",
+    "nyxWallpaper": "https://github.com/NyxDeck/nyx-wallpaper.git",
 }
 
 VISUALIZER_PLUGIN = "nyxRings"
@@ -710,6 +711,29 @@ def _wallpaper_next(package, argv: list[str]) -> int:
                             [a for a in argv if a in ("--json", "--dry-run")])
 
 
+def _wallpaper_thumb(package, argv: list[str]) -> int:
+    """Generate one thumbnail on demand and print its path — what a UI needs."""
+    backend, wallpaper_config, scanner = package
+    positional = [a for a in argv if not a.startswith("-")]
+    if not positional:
+        err(t("用法：nyxdeck wallpaper thumb <文件> [--json]",
+              "usage: nyxdeck wallpaper thumb <file> [--json]"))
+        return 2
+    item = _wallpaper_item(scanner, Path(positional[0]).expanduser())
+    if item is None:
+        err(t(f"找不到壁纸：{positional[0]}", f"no such wallpaper: {positional[0]}"))
+        return 1
+    if not os.path.isfile(item.thumb_path):
+        scanner.WallpaperScanner._generate_thumbnail_worker(None, item)
+    ready = os.path.isfile(item.thumb_path)
+    if "--json" in argv:
+        print(json.dumps({"path": item.path, "thumb": item.thumb_path if ready else ""},
+                         ensure_ascii=False))
+    else:
+        say(item.thumb_path if ready else t("缩略图生成失败", "thumbnail generation failed"))
+    return 0 if ready else 1
+
+
 def _wallpaper_cache(argv: list[str]) -> int:
     package = _wallpaper_package()
     if package is None:
@@ -765,6 +789,8 @@ def cmd_wallpaper(argv: list[str]) -> int:
         return _wallpaper_apply(package, argv[1:])
     if action == "next":
         return _wallpaper_next(package, argv[1:])
+    if action == "thumb":
+        return _wallpaper_thumb(package, argv[1:])
 
     err(t(f"未知操作：{action}（status | list | sources | download | set | next | cache）",
           f"unknown action: {action} (status | list | sources | download | set | next | cache)"))
@@ -1366,6 +1392,7 @@ PLUGIN_CATEGORY_LABELS = {
 }
 PLUGIN_CATEGORY = {
     "nyxRings": "visual",
+    "nyxWallpaper": "visual",
     "mihomoTun": "network",
 }
 PLUGIN_TAGS = {
@@ -1373,6 +1400,8 @@ PLUGIN_TAGS = {
                  "Audio visualizer, used as a DMS desktop widget"),
     "mihomoTun": ("Mihomo TUN 代理：顶栏组件 + 本地控制面板",
                   "Mihomo TUN proxy: bar widget plus a local control panel"),
+    "nyxWallpaper": ("壁纸：静态 + 动态（mpvpaper），带资源下载与二级分类",
+                     "Wallpapers: static and live (mpvpaper), with resource download and two-level categories"),
 }
 
 
