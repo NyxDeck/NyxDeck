@@ -35,6 +35,7 @@ DMS_SETTINGS = CONFIG_HOME / "DankMaterialShell" / "settings.json"
 DMS_SESSION = STATE_HOME / "DankMaterialShell" / "session.json"
 DMS_COLORS = CACHE_HOME / "DankMaterialShell" / "dms-colors.json"
 TAGLINE_FILE = CONFIG_HOME / "nyxdeck" / "tagline"
+LOGO_FILE = CONFIG_HOME / "nyxdeck" / "logo"
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -184,14 +185,75 @@ def parse_ansi(text: str) -> list[list[tuple[str, tuple | None]]]:
     return rows
 
 
-def distro_logo(palette: dict) -> list[list[tuple[str, tuple | None]]]:
-    """fastfetch's built-in logo for this distribution, in our palette."""
+def known_logos() -> list[str]:
+    """Names fastfetch accepts for --logo (its built-in set)."""
+    exe = shutil.which("fastfetch")
+    if not exe:
+        return []
+    try:
+        out = subprocess.run([exe, "--list-logos"], capture_output=True,
+                             text=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return sorted({name.strip() for name in re.findall(r'"([^"]+)"', out)})
+
+
+def print_logo_list(filter_text: str = "") -> int:
+    names = known_logos()
+    if filter_text:
+        needle = filter_text.lower()
+        names = [n for n in names if needle in n.lower()]
+    if not names:
+        print(f"no logo matches {filter_text!r}" if filter_text else "no logos found")
+        return 1
+    width = max(len(n) for n in names) + 2
+    per_row = max(1, 78 // width)
+    for index in range(0, len(names), per_row):
+        print("".join(n.ljust(width) for n in names[index:index + per_row]).rstrip())
+    print(f"\n{len(names)} logos")
+    return 0
+
+
+def logo_spec() -> dict:
+    """What fastfetch should draw for us.
+
+    Default is the distribution's own logo, auto-detected from /etc/os-release —
+    CachyOS resolves to its own art, but since it *is* Arch underneath, swapping
+    in another built-in (`arch_small`, say) or an ASCII file of your own is one
+    `nyxdeck logo` away.
+    """
+    try:
+        value = LOGO_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        value = ""
+    if not value or value == "default":
+        return {"type": "small"}
+    path = Path(value).expanduser()
+    if path.is_file():
+        return {"type": "file", "source": str(path)}
+    return {"type": "builtin", "source": value}
+
+
+def spec_for(name: str) -> dict:
+    """Resolve a name/path the way logo_spec() would, for --logo-preview."""
+    if not name:
+        return logo_spec()
+    if name == "default":
+        return {"type": "small"}
+    path = Path(name).expanduser()
+    if path.is_file():
+        return {"type": "file", "source": str(path)}
+    return {"type": "builtin", "source": name}
+
+
+def fetch_logo(spec: dict, palette: dict) -> list[list[tuple[str, tuple | None]]]:
+    """Render a fastfetch logo in our palette and return its cells."""
     exe = shutil.which("fastfetch")
     if not exe:
         return []
     config = {
         "logo": {
-            "type": "small",
+            **spec,
             "color": {str(k): "38;2;%d;%d;%d" % rgb(palette[v]) for k, v in LOGO_ROLES.items()},
             "padding": {"left": 0, "right": 0},
         },
@@ -206,6 +268,48 @@ def distro_logo(palette: dict) -> list[list[tuple[str, tuple | None]]]:
     finally:
         scratch.unlink(missing_ok=True)
     return [r for r in rows if any(c.strip() for c, _ in r)]
+
+
+def distro_logo(palette: dict) -> list[list[tuple[str, tuple | None]]]:
+    return fetch_logo(logo_spec(), palette)
+
+
+def preview_header(text: str) -> int:
+    """One header line with `text` as the tagline — the tagline picker's preview."""
+    palette = load_palette()
+    canvas = Canvas(min(shutil.get_terminal_size((84, 24)).columns, 84))
+    canvas.put(0, 0, "◆", fg=rgb(palette["primary"]), bold=True)
+    canvas.text(0, 2, "NYX DECK", fg=rgb(palette["primary"]), bold=True)
+    if text:
+        canvas.text(0, 11, f"· {text}", fg=rgb(palette["on_surface_variant"]))
+    else:
+        canvas.text(0, 11, t("(标语已隐藏，只留 NYX DECK)", "(tagline hidden; only NYX DECK)"),
+                    fg=rgb(palette["outline_variant"]))
+    sys.stdout.write(canvas.render() + "\n")
+    return 0
+
+
+def preview_logo(name: str) -> int:
+    """`nyxdeck logo preview`: draw one logo on its own."""
+    palette = load_palette()
+    if name and name != "default" and not Path(name).expanduser().is_file():
+        names = known_logos()
+        if names and name not in names:
+            near = [n for n in names if name.lower() in n.lower()][:5]
+            print(f"unknown logo {name!r}" + (f"; try: {', '.join(near)}" if near else ""),
+                  file=sys.stderr)
+            return 1
+    rows = fetch_logo(spec_for(name), palette)
+    if not rows:
+        print("fastfetch could not render that logo", file=sys.stderr)
+        return 1
+    canvas = Canvas(max(swidth("".join(c for c, _ in row)) for row in rows))
+    for y, row in enumerate(rows):
+        for x, (char, colour) in enumerate(row):
+            if char != " ":
+                canvas.put(y, x, char, fg=colour or rgb(palette["primary"]))
+    sys.stdout.write(canvas.render() + "\n")
+    return 0
 
 
 # ── canvas ───────────────────────────────────────────────────────────────────
@@ -493,6 +597,16 @@ class Panel:
         self.mark = mark
         self.logo = distro_logo(palette) if mark else []
 
+    def mark_rows(self) -> list:
+        """The mark as rows of (char, colour): the chosen logo, or the fallback."""
+        if self.logo:
+            return self.logo
+        if not self.mark:
+            return []
+        colours = ramp(self.p)
+        return [[(char, colours[min(index, len(colours) - 1)]) for char in line.rstrip()]
+                for index, line in enumerate(MARK)]
+
     def heading(self, row: int, col: int, label: str) -> None:
         """Section label: the accent colour and weight only. A filled block
         behind it reads as a halo on a translucent terminal."""
@@ -509,19 +623,28 @@ class Panel:
         label_w = max((swidth(title) for title, _ in entries), default=6)
         info_w = max(key_w + 2 + value_w, label_w) + 1
 
-        logo_w = 0
-        if self.logo:
-            logo_w = max(swidth("".join(char for char, _ in row)) for row in self.logo)
-        elif self.mark:
-            logo_w = max(swidth(line) for line in MARK)
+        rows = self.mark_rows()
+        logo_w = max((swidth("".join(char for char, _ in row)) for row in rows), default=0)
         gap = 3 if logo_w else 0
-        if logo_w and logo_w + gap + info_w + 2 > self.width:
-            logo_w = gap = 0        # no room for the mark beside the text
-            self.logo = []
 
-        content = logo_w + gap + info_w
+        # Try to keep the mark beside the text: stacking pushes the whole info
+        # block under the logo and makes the panel as tall as both.
+        min_info = 26
+        stacked = False
+        if logo_w:
+            room = self.width - logo_w - gap - 2
+            if room < info_w:
+                if room >= min_info:
+                    info_w = room          # elide the long values instead
+                elif logo_w + 2 <= self.width:
+                    stacked = True
+                    gap = 0
+                else:
+                    rows, logo_w = [], 0
+
+        content = info_w if stacked else logo_w + gap + info_w
         pad = max(1, min(6, (self.width - content - 1) // 2))
-        info_col = pad + logo_w + gap
+        info_col = pad if stacked else pad + logo_w + gap
 
         top = 2
         # Header sits with the text column, not out on its own.
@@ -537,18 +660,24 @@ class Panel:
             self.c.text(top, info_col + 11, f"· {slogan}", fg=rgb(p["on_surface_variant"]))
 
         body = top + 2
-        if self.logo:
-            # Top-aligned with the text, the way a fetch normally reads; centring
-            # it left equal blanks above and below, which looked accidental.
-            for index, row in enumerate(self.logo):
-                for column, (char, colour) in enumerate(row):
-                    if char != " ":
-                        self.c.put(body + index, pad + column, char,
-                                   fg=colour or rgb(p["primary"]))
-        elif self.mark:
-            colours = ramp(p)
-            for index, line in enumerate(MARK):
-                self.c.text(body + index, pad, line.rstrip(), fg=colours[min(index, len(colours) - 1)])
+        if rows:
+            if stacked:
+                for index, row in enumerate(rows):
+                    width = swidth("".join(char for char, _ in row))
+                    offset = pad + max(0, (info_w - width) // 2)
+                    for column, (char, colour) in enumerate(row):
+                        if char != " ":
+                            self.c.put(body + index, offset + column, char,
+                                       fg=colour or rgb(p["primary"]))
+                body += len(rows) + 1
+            else:
+                # Top-aligned with the text, the way a fetch normally reads;
+                # centring it left equal blanks above and below.
+                for index, row in enumerate(rows):
+                    for column, (char, colour) in enumerate(row):
+                        if char != " ":
+                            self.c.put(body + index, pad + column, char,
+                                       fg=colour or rgb(p["primary"]))
 
         value_col = info_col + key_w + 2
         row = body
@@ -561,8 +690,14 @@ class Panel:
                     "accent": rgb(p["tertiary"]),
                     "muted": rgb(p["on_surface_variant"]),
                 }.get(style, rgb(p["on_surface"]))
-                while swidth(value) > info_w - (value_col - info_col) - 1 and value:
-                    value = value[:-1]
+                room = info_w - (value_col - info_col) - 1
+                if swidth(value) > room:
+                    if room > 1:
+                        while value and swidth(value) > room - 1:
+                            value = value[:-1]
+                        value += "…"
+                    else:
+                        value = value[:room]
                 self.c.text(row, value_col, value, fg=colour)
                 row += 1
             row += 1
@@ -577,7 +712,7 @@ def native_config(palette: dict) -> str:
     return json.dumps(
         {
             "logo": {
-                "type": "small",
+                **logo_spec(),
                 "color": {str(k): fg(v) for k, v in LOGO_ROLES.items()},
                 "padding": {"top": 1, "left": 2, "right": 4},
             },
@@ -637,13 +772,26 @@ def main() -> int:
     parser.add_argument("--native", action="store_true", help="render with fastfetch instead")
     parser.add_argument("--install", action="store_true", help="write the fastfetch config")
     parser.add_argument("--width", type=int, default=0, help="override the column count")
+    parser.add_argument("--logo-preview", nargs="?", const="", default=None, metavar="NAME",
+                        help="draw one logo (default: the configured one)")
+    parser.add_argument("--logo-list", nargs="?", const="", default=None, metavar="FILTER",
+                        help="list the built-in logo names")
+    parser.add_argument("--header-preview", default=None, metavar="TEXT",
+                        help="draw the header with TEXT as the tagline")
     args = parser.parse_args()
+
+    if args.header_preview is not None:
+        return preview_header(args.header_preview)
+    if args.logo_list is not None:
+        return print_logo_list(args.logo_list)
+    if args.logo_preview is not None:
+        return preview_logo(args.logo_preview)
 
     palette = load_palette()
     if args.native or args.install:
         return run_native(palette, args.install)
 
-    width = max(args.width or min(shutil.get_terminal_size((90, 24)).columns, 84), 40)
+    width = max(args.width or min(shutil.get_terminal_size((90, 24)).columns, 100), 40)
     mark = not (args.compact or args.no_logo) and width >= 64
     panel = Panel(palette, width, mark)
     panel.draw(collect())

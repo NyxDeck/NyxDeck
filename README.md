@@ -91,6 +91,11 @@ nyxdeck plugin install <id> [--force]
 nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck logo pick              # one screen: choices, live preview, type to filter
+nyxdeck logo [show]            # the panel mark: show | list [filter] | preview [name]
+nyxdeck logo set arch_small    # a built-in fastfetch logo, or a path to an ASCII file
+nyxdeck logo --reset           # back to the system default
+nyxdeck tagline pick           # type a tagline, watch the header update
 nyxdeck tagline [text]         # the NYX DECK tagline: text | --reset | --blank | show
 nyxdeck fetch                  # terminal welcome panel (colours follow the wallpaper)
 nyxdeck fetch --compact        # no mark
@@ -134,11 +139,29 @@ A `rice  NyxDeck` row credits the desktop, the same slot NyxDeck used. Section
 labels carry no background block, which would read as a halo on a translucent
 terminal.
 
-The mark is fastfetch's built-in logo for the detected distribution (the same
-(official distro art, so it looks as deliberate as the distro's own), recoloured
-from the palette — fastfetch drops colour when stdout is a pipe, so it is
-captured through a pty and merged into the canvas. A hand-drawn crescent is
-used only when fastfetch is missing.
+The mark defaults to fastfetch's built-in logo for the detected distribution
+(official distro art, so it looks as deliberate as the distro's own),
+recoloured from the palette — fastfetch drops colour when stdout is a pipe, so
+it is captured through a pty and merged into the canvas. A hand-drawn crescent
+is used only when fastfetch is missing.
+
+`nyxdeck logo` swaps it. `pick` opens one screen holding the choices, the
+current value, a live preview of the highlighted logo and type-to-filter (fzf
+underneath, so `esc` cancels; the plain menu is the fallback without fzf).
+`list` prints the names — CachyOS is Arch underneath, so `arch_small` and
+friends are right there — `preview` draws one on its own, `set <name|file>`
+stores it in `~/.config/nyxdeck/logo` and `--reset` returns to the auto-detected
+default. A path to an ASCII file of your own works the same way.
+
+Wide art is kept beside the text rather than pushed underneath it: the panel
+uses up to the full terminal width (capped at 100 columns) and elides the
+longest values with `…` so the columns still fit. Only when that would leave the
+text column narrower than 26 cells — `CachyOS` (54 wide) on an 84-column
+terminal — does it stack the logo above, centred, and only a logo wider than the
+terminal itself is dropped.
+
+The tagline has the same shape: `nyxdeck tagline pick` is a prompt whose preview
+redraws the header as you type, with a few suggestions listed.
 
 The header reads `◆ NYX DECK · <tagline>`. The tagline defaults to the
 localised "a self-contained desktop" / 自足的桌面 and is overridable with
