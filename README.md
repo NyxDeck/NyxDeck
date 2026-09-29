@@ -188,6 +188,25 @@ so NyxDeck taking over `~/.config/fish` is what would make this automatic). `--n
 and `--install` writes that config into `~/.config/fastfetch` (backing the old
 one up first) for anyone who runs bare `fastfetch`.
 
+### Shell prompt
+
+The prompt is starship and its layout lives in `configs/starship.toml` — the
+`╭╴ … ╰─❯` shape. That file is two things at once: the
+layout is NyxDeck's, and the `# >>> DMS STARSHIP PALETTE >>>` block inside it
+belongs to DMS's matugen, which rewrites it on every theme change. Deployment
+therefore **merges** rather than seeding: it takes the layout from this
+repository and keeps the palette block from the machine (normalising its markers
+and table name to `dms`), so a box that still carries a Noctalia-era
+`starship.toml` gets the layout corrected while keeping its colours. Deploying
+is idempotent once the two agree.
+
+`configs/fish/conf.d/nyxdeck-starship.fish` makes a shell actually use it.
+`conf.d` is sourced before `config.fish`, so it cannot know whether the user's
+own configuration is about to initialise starship; it defers to the first
+`fish_prompt` event and checks `STARSHIP_SHELL` there, which means it initialises
+starship on a box that has none and does nothing on a box that already does
+(initialising twice would duplicate key bindings).
+
 ### Mihomo TUN pipeline
 
 `nyxdeck mihomo install` owns the whole chain and is idempotent:

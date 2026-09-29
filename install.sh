@@ -25,9 +25,6 @@ PRESERVE=(
     "niri/__custom__.kdl"
     "niri/orbit-items__custom__.toml"
     "niri/effects.kdl"
-    # DMS's matugen splices the palette into starship.toml at runtime, so the
-    # live file always differs from the repo's initial value. Seed-if-absent.
-    "starship.toml"
 )
 
 say()  { printf '%s\n' "$*"; }
@@ -66,6 +63,39 @@ collect() {
     done
 }
 
+# starship.toml is two files in one: the layout is NyxDeck's and the palette
+# block between the markers belongs to DMS's matugen, which rewrites it on every
+# theme change. Deploying therefore merges — repo layout, live palette — instead
+# of treating the whole file as seed-if-absent, so a machine that still carries
+# a Noctalia-era file gets the layout corrected while keeping its colours.
+starship_wanted() {
+    local src="$REPO_DIR/configs/starship.toml" dst="$CONFIG_HOME/starship.toml"
+    local layout palette
+    layout="$(awk '/PALETTE >>>/{skip=1} /PALETTE <<</{skip=0; next} !skip' "$src")"
+    if [ -f "$dst" ]; then
+        # Keep the live block, normalised to the DMS markers and table name so
+        # future matugen splices find it.
+        palette="$(awk '/PALETTE >>>/{keep=1} keep{print} /PALETTE <<</{keep=0}' "$dst" \
+            | sed -e 's|^\[palettes\..*\]|[palettes.dms]|' \
+                  -e 's|^# >>> .*PALETTE >>>$|# >>> DMS STARSHIP PALETTE >>>|' \
+                  -e 's|^# <<< .*PALETTE <<<$|# <<< DMS STARSHIP PALETTE <<<|')"
+    fi
+    [ -n "$palette" ] || palette="$(awk '/PALETTE >>>/{keep=1} keep{print} /PALETTE <<</{keep=0}' "$src")"
+    # Command substitution eats the blank line the layout ends with, so put it
+    # back: the palette block is separated from the layout by one empty line.
+    printf '%s\n\n%s\n' "$layout" "$palette"
+}
+
+# What a managed file should contain.
+desired_content() {
+    local key="$1" f="$2"
+    if [ "$key" = "starship.toml" ]; then
+        starship_wanted
+    else
+        sed "s|/home/user|$HOME|g" "$f"
+    fi
+}
+
 # Would this file be written? Preserved files that already exist are not.
 wants_write() {
     local key="$1" dst="$2"
@@ -82,7 +112,7 @@ plan_changes() {
         if [ ! -e "$dst" ]; then
             say "  + $dst"
             changed=1
-        elif ! sed "s|/home/user|$HOME|g" "$f" | cmp -s - "$dst"; then
+        elif ! desired_content "$key" "$f" | cmp -s - "$dst"; then
             say "  ~ $dst"
             changed=1
         fi
@@ -108,10 +138,17 @@ do_deploy() {
     while IFS=$'\t' read -r key f dst; do
         wants_write "$key" "$dst" || continue
         mkdir -p "$(dirname "$dst")"
-        if [ -e "$dst" ] && ! sed "s|/home/user|$HOME|g" "$f" | cmp -s - "$dst"; then
+        if [ -e "$dst" ] && ! desired_content "$key" "$f" | cmp -s - "$dst"; then
             backup="$BACKUP_ROOT/$STAMP/$key"
             mkdir -p "$(dirname "$backup")"
             cp -p "$dst" "$backup"
+        fi
+        if [ "$key" = "starship.toml" ]; then
+            # Written from the merge, through a temp file so an existing symlink
+            # is replaced rather than written through.
+            desired_content "$key" "$f" > "$dst.tmp.$$" \
+                && chmod 644 "$dst.tmp.$$" && mv -f "$dst.tmp.$$" "$dst"
+            continue
         fi
         # --remove-destination so a managed path that is currently a symlink
         # (e.g. kitty/current-theme.conf -> themes/noctalia.conf) is replaced
