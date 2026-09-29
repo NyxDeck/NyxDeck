@@ -83,3 +83,17 @@ cursor {
 // 你也可以在当前目录创建 __custom__/ 文件夹放置个人脚本。
 // ==========================================================
 include "__custom__.kdl"
+
+// ==========================================================
+// DMS 自己管理的 include (included by the DankMaterialShell settings)
+// DMS 会把显示器、窗口规则、输入、布局、快捷键、光标等设置写进 niri/dms/，
+// 并在需要时自己往这个文件里补上下面几行。这里预先写出来，是为了让重新部署
+// 不会把它们删掉、也让 DMS 一开箱就能找到。optional=true 保证 DMS 还没写入
+// 文件时（全新机器）niri 配置依然有效。
+// ==========================================================
+include optional=true "dms/outputs.kdl"
+include optional=true "dms/windowrules.kdl"
+include optional=true "dms/input.kdl"
+include optional=true "dms/layout.kdl"
+include optional=true "dms/binds.kdl"
+include optional=true "dms/cursor.kdl"
