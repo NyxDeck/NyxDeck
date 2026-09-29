@@ -47,7 +47,8 @@ CORE_DEPS = [
     "ttf-jetbrains-mono-nerd", "noto-fonts-cjk",
 ]
 # Handy but not required; `nyxdeck deps --optional`.
-OPTIONAL_DEPS = ["tmux", "inotify-tools", "ffmpegthumbnailer", "grim", "slurp", "wl-clipboard"]
+OPTIONAL_DEPS = ["tmux", "inotify-tools", "ffmpegthumbnailer", "grim", "slurp", "wl-clipboard",
+                 "img2pdf"]
 
 # Plugins installed by cloning a repository. Other ids go through
 # `dms plugins install` (the registry).
@@ -57,6 +58,11 @@ PLUGIN_REPOS = {
 }
 
 VISUALIZER_PLUGIN = "nyxRings"
+# Plugins from the DMS registry that this desktop expects to have. They are not
+# ours, so they are installed by DMS (see `nyxdeck plugin add`); the list exists
+# so `verify` can say when one is missing on a fresh machine.
+MARKET_PLUGINS = ["networkIndicator", "quickCapture", "dankKDEConnect",
+                  "emojiLauncher", "calculator"]
 
 BANNER = r"""
 ███╗   ██╗██╗   ██╗██╗  ██╗██████╗ ███████╗ ██████╗██╗  ██╗
@@ -918,13 +924,15 @@ def _verify_shell() -> list[tuple[str, str, str]]:
 def _verify_plugins() -> list[tuple[str, str, str]]:
     if not have("dms"):
         return [("skip", t("插件", "plugins"), t("DMS 不在 PATH", "dms is not on PATH"))]
+    rows = [("warn", name, t("声明要用但没装（nyxdeck plugin add %s）" % name,
+                             "declared but missing (nyxdeck plugin add %s)" % name))
+            for name in MARKET_PLUGINS if not plugin_state(name)["dir"]]
     if not PLUGIN_DIR.is_dir():
         return [("skip", t("插件", "plugins"), str(PLUGIN_DIR))]
     installed = sorted(entry for entry in PLUGIN_DIR.iterdir()
                        if entry.is_dir() and not entry.name.startswith("."))
     if not installed:
         return [("skip", t("插件", "plugins"), t("目录是空的", "the directory is empty"))]
-    rows: list[tuple[str, str, str]] = []
     for entry in installed:
         state = plugin_state(entry.name)
         level, details = "ok", []
@@ -1251,12 +1259,70 @@ def _install_repo_plugin(plugin: str, url: str, force: bool = False) -> int:
     return 0
 
 
+def _plugin_has_bar_widget(plugin: str) -> bool:
+    """Does this plugin's manifest claim a bar widget surface?"""
+    manifest = plugin_dir(plugin) / "plugin.json"
+    if not manifest.is_file():
+        return False
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if data.get("type") == "widget":
+        return True
+    if "widget" in (data.get("components") or {}):
+        return True
+    return "dankbar-widget" in (data.get("capabilities") or [])
+
+
+def _bar_widgets(data: dict) -> list:
+    """The bar section DMS keeps plugin widgets in."""
+    configs = data.get("barConfigs")
+    if not isinstance(configs, list) or not configs:
+        return []
+    widgets = configs[0].get("rightWidgets")
+    if not isinstance(widgets, list):
+        widgets = []
+        configs[0]["rightWidgets"] = widgets
+    return widgets
+
+
+def cmd_plugin_add(plugin: str) -> int:
+    """Install a plugin, enable it, and give it a slot in the bar if it wants one."""
+    if not plugin:
+        err(t("用法：nyxdeck plugin add <id>", "usage: nyxdeck plugin add <id>"))
+        return 2
+    if not plugin_state(plugin)["dir"]:
+        rc = cmd_plugin(["install", plugin])
+        if rc != 0:
+            return rc
+    if have("dms"):
+        dms("ipc", "call", "plugins", "enable", plugin)
+    if not _plugin_has_bar_widget(plugin):
+        ok(t(f"{plugin} 已装并启用（它不是顶栏组件，不用占位置）",
+             f"{plugin} installed and enabled (it has no bar widget to place)"))
+        return 0
+    data = load_settings()
+    if any(isinstance(w, dict) and w.get("id") == plugin for w in _bar_widgets(data)):
+        ok(t(f"{plugin} 已经在顶栏里了", f"{plugin} is already in the bar"))
+        return 0
+    _bar_widgets(data).append({"id": plugin, "enabled": True})
+    save_settings(data)
+    # DMS only reads barConfigs at startup, so a restart is what makes this real.
+    dms_restart()
+    ok(t(f"{plugin} 已装、启用，并放进顶栏右侧", f"{plugin} installed, enabled, and added to the bar"))
+    return 0
+
+
 def cmd_plugin(argv: list[str]) -> int:
     action = argv[0] if argv else "list"
     rest = argv[1:]
 
     if action == "list":
         return print_plugin_report()
+
+    if action == "add":
+        return cmd_plugin_add(rest[0] if rest else "")
 
     if action in ("enable", "disable"):
         if not rest:
@@ -2518,7 +2584,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "every post-install check in one pass: configuration, deployment, dependencies, shell, plugins, session, Mihomo (--no-deps/--no-plugins)"))
     sub.add_parser("deps", help=t("安装核心软件包（pacman）；--check 只列出缺失",
                                  "install the core packages (pacman); --check lists what is missing"))
-    sub.add_parser("plugin", help=t("管理 DMS 插件（按分类展示）：list | install <id> [--force] | enable <id> | disable <id> | update [id]",
+    sub.add_parser("plugin", help=t("管理 DMS 插件（按分类展示）：list | add <id>（装+启用+进顶栏）| install <id> [--force] | enable <id> | disable <id> | update [id]",
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
