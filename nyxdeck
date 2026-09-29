@@ -324,6 +324,216 @@ def cmd_deploy(argv: list[str]) -> int:
     return subprocess.run([str(script), *argv]).returncode
 
 
+# `verify` is the stage the pipeline was missing: install → update → verify →
+# snapshot → uninstall. It runs every post-install check in one pass and lets the
+# exit code decide — only a failure makes it non-zero, because a piece that is
+# simply not on this machine (no Mihomo, no DMS) is not a broken machine.
+
+
+def _git_state(directory: Path) -> dict:
+    """HEAD, dirty flag and ahead/behind for a checkout; {} when it is not one."""
+    if not have("git") or not (directory / ".git").is_dir():
+        return {}
+    state: dict = {
+        "head": _capture(["git", "-C", str(directory), "rev-parse", "--short", "HEAD"]),
+        "dirty": bool(_capture(["git", "-C", str(directory), "status", "--porcelain"])),
+        "ahead": 0,
+        "behind": 0,
+    }
+    counts = _capture(["git", "-C", str(directory), "rev-list", "--left-right", "--count",
+                       "HEAD...@{upstream}"]).split()
+    if len(counts) == 2:
+        try:
+            state["ahead"], state["behind"] = int(counts[0]), int(counts[1])
+        except ValueError:
+            pass
+    return state
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def _verify_section(title: str, rows: list[tuple[str, str, str]]) -> int:
+    """Print a section of check rows; return how many of them failed."""
+    say("\n" + title)
+    painter = {"ok": ok, "warn": warn, "fail": err,
+               "skip": lambda text: say(f"{MUTED}-{R} {text}")}
+    for level, label, detail in rows:
+        painter.get(level, say)(f"{label}  —  {detail}" if detail else label)
+    return sum(1 for level, _, _ in rows if level == "fail")
+
+
+def _verify_config() -> list[tuple[str, str, str]]:
+    rows: list[tuple[str, str, str]] = []
+    if not NIRI_CONFIG.is_file():
+        rows.append(("fail", t("niri 配置存在", "niri config present"), str(NIRI_CONFIG)))
+    elif not have("niri"):
+        rows.append(("warn", t("niri 配置校验", "niri config validates"),
+                     t("niri 不在 PATH", "niri is not on PATH")))
+    else:
+        res = subprocess.run(["niri", "validate", "-c", str(NIRI_CONFIG)],
+                             capture_output=True, text=True, check=False)
+        rows.append(("ok" if res.returncode == 0 else "fail",
+                     t("niri 配置校验", "niri config validates"),
+                     "" if res.returncode == 0 else _last_line(res.stderr or res.stdout)))
+    link = HOME / ".local" / "bin" / "nyxdeck"
+    rows.append(("ok", t("nyxdeck 命令链接", "nyxdeck command link"), str(link)) if link.exists()
+                else ("warn", t("nyxdeck 命令链接", "nyxdeck command link"),
+                      t("未创建（nyxdeck install）", "not created (nyxdeck install)")))
+    rows.append(("ok", t("DMS 设置文件", "DMS settings file"), str(SETTINGS)) if SETTINGS.is_file()
+                else ("warn", t("DMS 设置文件", "DMS settings file"),
+                      t("还没有（先启动一次会话）", "not there yet (start a session once)")))
+    return rows
+
+
+def _verify_deployment() -> list[tuple[str, str, str]]:
+    """Let install.sh say whether every deployed file still matches the repository."""
+    script = REPO / "install.sh"
+    if not script.is_file():
+        return [("fail", "install.sh", t("仓库里没有", "not in the repository"))]
+    res = subprocess.run([str(script), "status"], capture_output=True, text=True, check=False)
+    if res.returncode not in (0, 1):
+        return [("fail", t("install.sh status", "install.sh status"), _last_line(res.stderr))]
+    if res.returncode == 0:
+        return [("ok", t("部署与仓库同步", "deployment matches the repository"), "")]
+    pending = [line[4:] for line in res.stdout.splitlines()
+               if line.startswith("  + ") or line.startswith("  ~ ")]
+    shown = ", ".join(Path(path).name for path in pending[:3])
+    if len(pending) > 3:
+        shown += " …"
+    return [("warn", t("部署有差异", "deployment differs"),
+             t(f"{len(pending)} 个文件待同步：{shown}（nyxdeck install）",
+               f"{len(pending)} file(s) pending: {shown} (nyxdeck install)"))]
+
+
+def _verify_deps() -> list[tuple[str, str, str]]:
+    missing = [pkg for pkg in CORE_DEPS if not _pkg_installed(pkg)]
+    if not missing:
+        return [("ok", t(f"{len(CORE_DEPS)} 个核心依赖", f"{len(CORE_DEPS)} core dependencies"), "")]
+    return [("fail", t("核心依赖", "core dependencies"),
+             t(f"缺 {', '.join(missing)}（nyxdeck deps）",
+               f"missing {', '.join(missing)} (nyxdeck deps)"))]
+
+
+def _verify_shell() -> list[tuple[str, str, str]]:
+    rows: list[tuple[str, str, str]] = []
+    rows.append(("ok", "starship", "") if have("starship")
+                else ("warn", "starship", t("未安装（提示符不生效）", "not installed (no prompt)")))
+    if have("fish"):
+        want, got, missing = _fisher_state()
+        if want == 0:
+            rows.append(("skip", t("fisher 插件", "fisher plugins"), t("没有声明", "none declared")))
+        elif missing:
+            rows.append(("warn", t("fisher 插件", "fisher plugins"),
+                         t(f"{got}/{want}，缺 {', '.join(missing)}",
+                           f"{got}/{want}, missing {', '.join(missing)}")))
+        else:
+            rows.append(("ok", t("fisher 插件", "fisher plugins"), f"{got}/{want}"))
+    for name in (".bashrc", ".zshrc"):
+        rc = HOME / name
+        if not rc.is_file():
+            continue
+        if "nyxdeck/nyxdeck.sh" in rc.read_text(encoding="utf-8", errors="replace"):
+            rows.append(("ok", name, t("已挂 NyxDeck hook", "NyxDeck hook present")))
+        else:
+            rows.append(("warn", name, t("没有 NyxDeck hook（nyxdeck shell install）",
+                                         "no NyxDeck hook (nyxdeck shell install)")))
+    return rows
+
+
+def _verify_plugins() -> list[tuple[str, str, str]]:
+    if not have("dms"):
+        return [("skip", t("插件", "plugins"), t("DMS 不在 PATH", "dms is not on PATH"))]
+    if not PLUGIN_DIR.is_dir():
+        return [("skip", t("插件", "plugins"), str(PLUGIN_DIR))]
+    installed = sorted(entry for entry in PLUGIN_DIR.iterdir()
+                       if entry.is_dir() and not entry.name.startswith("."))
+    if not installed:
+        return [("skip", t("插件", "plugins"), t("目录是空的", "the directory is empty"))]
+    rows: list[tuple[str, str, str]] = []
+    for entry in installed:
+        state = plugin_state(entry.name)
+        level, details = "ok", []
+        if not state["manifest_ok"]:
+            level = "fail"
+            details.append(t("plugin.json 与目录名不符", "plugin.json id does not match the directory"))
+        elif state["dms"] == "loaded":
+            details.append(t("已启用", "enabled"))
+        elif state["dms"] == "disabled":
+            level = "warn"
+            details.append(t("未启用", "disabled"))
+        else:
+            level = "warn"
+            details.append(t("DMS 未识别", "not in the DMS registry"))
+        git = _git_state(entry)
+        if not git:
+            level = "fail" if level == "fail" else "warn"
+            details.append(t("非 git 仓库，无法更新", "not a git checkout, cannot update"))
+        else:
+            if git["head"]:
+                details.append(git["head"])
+            if git["dirty"]:
+                level = "fail" if level == "fail" else "warn"
+                details.append(t("有未提交改动", "uncommitted changes"))
+            if git["behind"]:
+                level = "fail" if level == "fail" else "warn"
+                details.append(t(f"落后 origin {git['behind']} 个提交（nyxdeck plugin update）",
+                                 f"{git['behind']} commit(s) behind origin (nyxdeck plugin update)"))
+            elif git["ahead"]:
+                level = "fail" if level == "fail" else "warn"
+                details.append(t(f"领先 origin {git['ahead']} 个提交（未推送）",
+                                 f"{git['ahead']} commit(s) ahead of origin (not pushed)"))
+        rows.append((level, entry.name, " · ".join(details)))
+    return rows
+
+
+def _verify_session() -> list[tuple[str, str, str]]:
+    if not have("dms"):
+        return [("skip", t("DMS 会话", "DMS session"), t("dms 不在 PATH", "dms is not on PATH"))]
+    if dms("ipc", "call", "theme", "getMode").returncode == 0:
+        return [("ok", t("DMS 运行中并响应 IPC", "DMS is running and answers IPC"), "")]
+    return [("fail", t("DMS 无响应", "DMS does not answer"),
+             t("会话没在跑？（dms run）", "is the session running? (dms run)"))]
+
+
+def _verify_mihomo() -> list[tuple[str, str, str]]:
+    if not have("mihomo"):
+        return [("skip", "mihomo", t("未安装（nyxdeck mihomo install）",
+                                      "not installed (nyxdeck mihomo install)"))]
+    version = _capture(["mihomo", "-v"]).splitlines()
+    rows = [("ok", "mihomo", " ".join(version[0].split()[:3]) if version else "")]
+    state = _service_state()
+    rows.append(("ok" if state == "active" else "warn", MIHOMO_UNIT,
+                 state or t("未知", "unknown")))
+    rows.append(("ok", t("本地面板", "local dashboard"), "") if _dashboard_ok()
+                else ("warn", t("本地面板", "local dashboard"),
+                      t("未就绪（nyxdeck mihomo dashboard）", "not ready (nyxdeck mihomo dashboard)")))
+    return rows
+
+
+def cmd_verify(argv: list[str]) -> int:
+    """Every post-install check in one pass, with a single verdict."""
+    say(t("NyxDeck 验证", "NyxDeck verify"))
+    failed = _verify_section(t("配置", "Configuration"), _verify_config())
+    failed += _verify_section(t("部署", "Deployment"), _verify_deployment())
+    if "--no-deps" not in argv:
+        failed += _verify_section(t("依赖", "Dependencies"), _verify_deps())
+    failed += _verify_section(t("shell 层", "Shell layer"), _verify_shell())
+    if "--no-plugins" not in argv:
+        failed += _verify_section(t("插件", "Plugins"), _verify_plugins())
+    failed += _verify_section(t("会话", "Session"), _verify_session())
+    failed += _verify_section(t("Mihomo TUN", "Mihomo TUN"), _verify_mihomo())
+    say("")
+    if failed:
+        err(t(f"{failed} 项未通过（上面标 ✗ 的行）",
+              f"{failed} check(s) failed (the ✗ rows above)"))
+        return 1
+    ok(t("全部通过", "everything checks out"))
+    return 0
+
+
 def cmd_doctor(_: list[str]) -> int:
     say(t("NyxDeck 体检", "NyxDeck doctor"))
 
@@ -1682,7 +1892,11 @@ def cmd_setup(argv: list[str]) -> int:
               "(nyxdeck backup restore undoes it)"))
         return 1
     ok(t("全套链路就绪", "the whole pipeline is ready"))
-    return 0
+    say("")
+    # Close the loop: the last step of setup is the same check the user can run
+    # later, so a setup that leaves something broken says so right away.
+    flags = [flag for flag in ("--no-deps", "--no-plugins") if flag in argv]
+    return cmd_verify(flags)
 
 
 def cmd_update(argv: list[str]) -> int:
@@ -1821,6 +2035,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help=t("部署是否已同步", "is the deployment up to date?"))
     sub.add_parser("uninstall", help=t("移除部署的文件（机器状态保留）", "remove deployed files (machine state is kept)"))
     sub.add_parser("doctor", help=t("检查依赖、会话与插件", "check dependencies, the session, and plugins"))
+    sub.add_parser("verify", help=t("一条命令跑完全套自检：配置、部署、依赖、shell、插件、会话、Mihomo（--no-deps/--no-plugins）",
+                                    "every post-install check in one pass: configuration, deployment, dependencies, shell, plugins, session, Mihomo (--no-deps/--no-plugins)"))
     sub.add_parser("deps", help=t("安装核心软件包（pacman）；--check 只列出缺失",
                                  "install the core packages (pacman); --check lists what is missing"))
     sub.add_parser("plugin", help=t("管理 DMS 插件（按分类展示）：list | install <id> [--force] | enable <id> | disable <id> | update [id]",
@@ -1870,6 +2086,8 @@ def main(argv: list[str]) -> int:
         return cmd_deploy([command, *rest])
     if command == "doctor":
         return cmd_doctor(rest)
+    if command == "verify":
+        return cmd_verify(rest)
     if command == "deps":
         return cmd_deps(rest)
     if command == "plugin":

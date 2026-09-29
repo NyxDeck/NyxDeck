@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: syntax and unit tests
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pacman
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Sy --noconfirm python python-pytest
+      - name: Python syntax
+        run: |
+          python -m py_compile nyxdeck
+          python -m compileall -q configs/fastfetch configs/fish
+      - name: Shell syntax
+        run: |
+          bash -n install.sh
+          for script in configs/nyxdeck/*.sh configs/matugen/*.sh configs/niri/scripts/*.sh; do
+            bash -n "$script"
+          done
+      - name: Tests
+        run: python -m pytest -q tests
+
+  fresh-install:
+    name: deploy into an empty HOME
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pacman
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Sy --noconfirm git shadow niri fish starship fastfetch matugen jq python
+      - name: Deploy as a user who has never logged in
+        run: |
+          useradd -m tester
+          cp -r "$GITHUB_WORKSPACE" /tmp/src
+          chown -R tester /tmp/src
+          su - tester -c 'cd /tmp/src && ./install.sh install'
+      - name: The deployed session configuration has to be valid
+        run: |
+          su - tester -c 'niri validate -c ~/.config/niri/config.kdl'
+          su - tester -c 'cd /tmp/src && ./nyxdeck verify --no-deps --no-plugins'
+      - name: The command line works without a session or a display manager
+        run: |
+          su - tester -c 'cd /tmp/src && ./nyxdeck status'
+          su - tester -c 'cd /tmp/src && ./nyxdeck help >/dev/null'

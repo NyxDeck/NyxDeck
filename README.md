@@ -81,9 +81,11 @@ run asks for the language. Every command also works non-interactively:
 ```bash
 nyxdeck                  # help
 nyxdeck install          # deploy the configuration (runs install.sh)
-nyxdeck status           # is the deployment up to date?
+nyxdeck status           # is the deployment up to date? (non-zero when it is not)
 nyxdeck uninstall        # remove deployed files (machine state is kept)
 nyxdeck doctor           # check dependencies, the session, and plugins
+nyxdeck verify           # every check in one pass: non-zero when one of them failed
+                         #   --no-deps / --no-plugins for a machine without either
 nyxdeck deps [--check]   # install the core packages (cava, matugen, qt6ct, wtype)
 nyxdeck widget list      # desktop widgets
 nyxdeck plugin list            # grouped by category, with install/enable state
@@ -301,7 +303,15 @@ follows the same rule.
 
 ## Verifying an installation
 
-Two levels of checking, neither of which needs a graphical session.
+Three levels of checking, none of which needs a graphical session.
+
+**On a live machine.** One command covers everything, and it is the same check
+`setup` runs as its last step:
+
+```bash
+nyxdeck verify            # configuration, deployment, dependencies, shell layer,
+                          # plugins, session, Mihomo — non-zero if one failed
+```
 
 **Deploy into a throwaway HOME.** The cheapest way to prove the deploy path works
 from scratch:
