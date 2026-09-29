@@ -107,6 +107,15 @@ desired_content() {
     fi
 }
 
+# Is the deployed file already what we would write?
+# Hashed rather than piped through `cmp`: diffutils is not part of a minimal
+# system, and a missing `cmp` made every managed file look changed.
+same_content() { # same_content <key> <source> <target>
+    local key="$1" f="$2" dst="$3"
+    [ -f "$dst" ] || return 1
+    [ "$(desired_content "$key" "$f" | sha256sum)" = "$(sha256sum < "$dst")" ]
+}
+
 # Would this file be written? Preserved files that already exist are not.
 wants_write() {
     local key="$1" dst="$2"
@@ -123,7 +132,7 @@ plan_changes() {
         if [ ! -e "$dst" ]; then
             say "  + $dst"
             changed=1
-        elif ! desired_content "$key" "$f" | cmp -s - "$dst"; then
+        elif ! same_content "$key" "$f" "$dst"; then
             say "  ~ $dst"
             changed=1
         fi
@@ -149,7 +158,7 @@ do_deploy() {
     while IFS=$'\t' read -r key f dst; do
         wants_write "$key" "$dst" || continue
         mkdir -p "$(dirname "$dst")"
-        if [ -e "$dst" ] && ! desired_content "$key" "$f" | cmp -s - "$dst"; then
+        if [ -e "$dst" ] && ! same_content "$key" "$f" "$dst"; then
             backup="$BACKUP_ROOT/$STAMP/$key"
             mkdir -p "$(dirname "$backup")"
             cp -p "$dst" "$backup"
@@ -252,9 +261,11 @@ do_status() {
         say ""
         msg "上面是待同步的差异。运行 ./install.sh 应用。" \
             "The differences above are not deployed yet. Run ./install.sh to apply."
-    else
-        msg "  全部已同步。" "  Everything is in sync."
+        # Non-zero so callers can treat `status` as a check; `nyxdeck verify`
+        # reads it to decide whether the deployment still matches the repository.
+        return 1
     fi
+    msg "  全部已同步。" "  Everything is in sync."
 }
 
 do_uninstall() {
