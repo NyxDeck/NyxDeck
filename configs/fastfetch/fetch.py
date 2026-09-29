@@ -34,6 +34,7 @@ STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state"))
 DMS_SETTINGS = CONFIG_HOME / "DankMaterialShell" / "settings.json"
 DMS_SESSION = STATE_HOME / "DankMaterialShell" / "session.json"
 DMS_COLORS = CACHE_HOME / "DankMaterialShell" / "dms-colors.json"
+TAGLINE_FILE = CONFIG_HOME / "nyxdeck" / "tagline"
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -44,6 +45,15 @@ _LANG = os.environ.get("NYXDECK_LANG", "en").lower()[:2]
 
 def t(zh: str, en: str) -> str:
     return zh if _LANG == "zh" else en
+
+
+def tagline() -> str:
+    """The header's tagline. `nyxdeck tagline` writes the file; a missing file
+    means the built-in default and an empty file hides the tagline entirely."""
+    try:
+        return TAGLINE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return t("自足的桌面", "a self-contained desktop")
 
 
 # Used only when DMS has not written a palette yet, so the panel still looks
@@ -517,8 +527,14 @@ class Panel:
         # Header sits with the text column, not out on its own.
         self.c.put(top, info_col, "◆", fg=rgb(p["primary"]), bold=True)
         self.c.text(top, info_col + 2, "NYX DECK", fg=rgb(p["primary"]), bold=True)
-        self.c.text(top, info_col + 11, f"· {t('自足的桌面', 'a self-contained desktop')}",
-                    fg=rgb(p["on_surface_variant"]))
+        slogan = tagline()
+        room = self.width - (info_col + 11) - 1
+        if slogan and swidth(slogan) > room:
+            while slogan and swidth(slogan) > room - 1:
+                slogan = slogan[:-1]
+            slogan += "…"
+        if slogan:
+            self.c.text(top, info_col + 11, f"· {slogan}", fg=rgb(p["on_surface_variant"]))
 
         body = top + 2
         if self.logo:

@@ -24,6 +24,7 @@ PLUGIN_DIR = DMS_DIR / "plugins"
 SETTINGS = DMS_DIR / "settings.json"
 NIRI_CONFIG = CONFIG_HOME / "niri" / "config.kdl"
 LANG_FILE = CONFIG_HOME / "nyxdeck" / "lang"
+TAGLINE_FILE = CONFIG_HOME / "nyxdeck" / "tagline"
 
 VERSION = "0.1.0"
 
@@ -930,6 +931,94 @@ def cmd_fetch(argv: list[str]) -> int:
     return subprocess.run([sys.executable or "python3", str(script), *argv]).returncode
 
 
+def default_tagline() -> str:
+    return t("自足的桌面", "a self-contained desktop")
+
+
+def current_tagline() -> str:
+    """Effective tagline: the file wins, otherwise the built-in default."""
+    try:
+        return TAGLINE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return default_tagline()
+
+
+def set_tagline(value: str) -> None:
+    TAGLINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TAGLINE_FILE.write_text(value + "\n", encoding="utf-8")
+
+
+def _prompt(question: str) -> str | None:
+    if not sys.stdin.isatty():
+        return None
+    try:
+        return input(f"{question}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def cmd_tagline(argv: list[str]) -> int:
+    action = argv[0] if argv else "show"
+
+    if action in ("show", "status"):
+        try:
+            custom = TAGLINE_FILE.read_text(encoding="utf-8").strip()
+            source = t("自定义", "custom")
+        except OSError:
+            custom, source = default_tagline(), t("默认", "default")
+        shown = custom if custom else t("(已隐藏)", "(hidden)")
+        say(t(f"标语：{shown}  （{source}）", f"tagline: {shown}  ({source})"))
+        say(t(f"文件：{TAGLINE_FILE}", f"file: {TAGLINE_FILE}"))
+        return 0
+
+    if action in ("--reset", "reset", "default"):
+        TAGLINE_FILE.unlink(missing_ok=True)
+        ok(t(f"标语已恢复默认：{default_tagline()}", f"tagline reset to: {default_tagline()}"))
+        return 0
+
+    if action in ("--blank", "blank", "hide", "none"):
+        set_tagline("")
+        ok(t("标语已隐藏（面板表头只留 NYX DECK）",
+             "tagline hidden (the header keeps only NYX DECK)"))
+        return 0
+
+    text = " ".join(argv).strip()
+    if not text:
+        err(t("用法: nyxdeck tagline <文本> | --reset | --blank | show",
+              "usage: nyxdeck tagline <text> | --reset | --blank | show"))
+        return 2
+    set_tagline(text)
+    ok(t(f"标语已设为：{text}", f"tagline set to: {text}"))
+    return 0
+
+
+def tagline_menu() -> None:
+    while True:
+        items = [
+            t(f"当前：{current_tagline() or '(已隐藏)'}", f"current: {current_tagline() or '(hidden)'}"),
+            t("输入新标语", "enter a new tagline"),
+            t("恢复默认", "restore the default"),
+            t("隐藏标语", "hide the tagline"),
+            t("返回", "Back"),
+        ]
+        choice = _menu(t("标语 / Tagline", "Tagline"), items)
+        if choice is None or choice == 4:
+            return
+        clear_screen()
+        if choice == 0:
+            pass
+        elif choice == 1:
+            answer = _prompt(t("新标语（留空取消）", "new tagline (empty cancels)"))
+            if answer:
+                cmd_tagline([answer])
+        elif choice == 2:
+            cmd_tagline(["--reset"])
+        elif choice == 3:
+            cmd_tagline(["--blank"])
+        if choice:
+            _press_any_key()
+
+
 # ── Interactive control panel ────────────────────────────────────────────────
 
 def main_menu() -> int:
@@ -943,11 +1032,12 @@ def main_menu() -> int:
             vis,
             t("插件（按分类）", "Plugins (by category)"),
             t("终端面板", "Terminal panel"),
+            t("标语 / Tagline", "Tagline"),
             t("语言 / Language", "Language"),
             t("退出", "Exit"),
         ]
         choice = _menu(t("控制面板", "Control panel"), items)
-        if choice is None or choice == 8:
+        if choice is None or choice == 9:
             return 0
         clear_screen()
         if choice == 0:
@@ -968,6 +1058,9 @@ def main_menu() -> int:
             show_logo()
             cmd_fetch([])
         elif choice == 7:
+            tagline_menu()
+            continue
+        elif choice == 8:
             select_language()
             continue
         _press_any_key()
@@ -990,6 +1083,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
+    sub.add_parser("tagline", help=t("查看/设置 NYX DECK 标语：<文本> | --reset | --blank | show",
+                                     "show or set the NYX DECK tagline: <text> | --reset | --blank | show"))
     sub.add_parser("fetch", help=t("终端欢迎面板（配色跟随壁纸）：[--compact|--native|--install]",
                                    "terminal welcome panel (colours follow the wallpaper): [--compact|--native|--install]"))
     sub.add_parser("visualizer", help=t("NyxRings 桌面组件：on | off | status",
@@ -1024,6 +1119,8 @@ def main(argv: list[str]) -> int:
         return cmd_plugin(rest)
     if command == "mihomo":
         return cmd_mihomo(rest)
+    if command == "tagline":
+        return cmd_tagline(rest)
     if command == "fetch":
         return cmd_fetch(rest)
     if command == "visualizer":

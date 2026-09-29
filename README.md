@@ -91,6 +91,7 @@ nyxdeck plugin install <id> [--force]
 nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck tagline [text]         # the NYX DECK tagline: text | --reset | --blank | show
 nyxdeck fetch                  # terminal welcome panel (colours follow the wallpaper)
 nyxdeck fetch --compact        # no mark
 nyxdeck fetch --native         # hand off to fastfetch with a generated config
@@ -138,6 +139,12 @@ The mark is fastfetch's built-in logo for the detected distribution (the same
 from the palette — fastfetch drops colour when stdout is a pipe, so it is
 captured through a pty and merged into the canvas. A hand-drawn crescent is
 used only when fastfetch is missing.
+
+The header reads `◆ NYX DECK · <tagline>`. The tagline defaults to the
+localised "a self-contained desktop" / 自足的桌面 and is overridable with
+`nyxdeck tagline <text>` (also in the interactive panel), `--reset` restores
+the default and `--blank` drops the tagline so only `NYX DECK` remains. It is
+stored in `~/.config/nyxdeck/tagline`.
 
 The panel is English; `NYXDECK_LANG=zh` switches it. Terminal and shell are
 read from the process tree rather than from fastfetch, which would otherwise
