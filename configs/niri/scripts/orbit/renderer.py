@@ -5,6 +5,10 @@ Modular, high-performance, frame-clock synchronized vector graphics rendering pi
 
 import math
 import cairo
+import gi
+
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
 from gi.repository import Pango, PangoCairo
 
 from .config import CAPSULE_IDLE_H, CAPSULE_ACTIVE_H, FLOAT_SPRING, DEADZONE_RADIUS

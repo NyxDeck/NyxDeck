@@ -42,8 +42,8 @@ CORE_DEPS = [
     "niri", "dms-shell",
     "kitty", "fish", "starship", "fastfetch",
     "matugen", "cava", "qt6ct", "wtype",
-    "fzf", "wlsunset", "mpvpaper", "ffmpeg", "jq", "eza", "git",
-    "python-gobject", "gtk-layer-shell",
+    "fzf", "wlsunset", "mpvpaper", "ffmpeg", "jq", "eza", "git", "curl",
+    "python-gobject", "gtk3", "gdk-pixbuf2", "gtk-layer-shell",
     "ttf-jetbrains-mono-nerd", "noto-fonts-cjk",
 ]
 # Handy but not required; `nyxdeck deps --optional`.
