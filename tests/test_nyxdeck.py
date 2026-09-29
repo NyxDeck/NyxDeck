@@ -8,6 +8,7 @@ tests exist to keep that class of change honest.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import types
 
@@ -211,3 +212,50 @@ def test_help_runs_without_a_deployment(nx, capsys):
 
 def test_unknown_command_exits_two(nx, capsys):
     assert nx.main(["definitely-not-a-command"]) == 2
+
+
+# ── wallpapers ───────────────────────────────────────────────────────────────
+
+def test_wallpaper_sources_merge_defaults_with_the_user_file(nx):
+    defaults = nx.wallpaper_sources()
+    assert any(s["name"] == "wallpaper-collection" for s in defaults)
+    assert all("url" in s for s in defaults)
+
+    nx.WALLPAPER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    nx.save_wallpaper_sources([{"name": "mine", "url": "https://example.invalid/w.git"},
+                               {"name": "wallpaper-collection", "url": "https://mine.invalid/x.git"}])
+    merged = {s["name"]: s for s in nx.wallpaper_sources()}
+    assert merged["mine"]["url"] == "https://example.invalid/w.git"
+    assert merged["wallpaper-collection"]["url"] == "https://mine.invalid/x.git"   # user wins
+    assert len(merged) == len(defaults) + 1
+
+
+def test_wallpaper_sources_remove_keeps_the_defaults(nx):
+    nx.WALLPAPER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    nx.save_wallpaper_sources([{"name": "wallpaper-collection", "url": "https://mine.invalid/x.git"}])
+    nx.save_wallpaper_sources([s for s in nx._user_wallpaper_sources()
+                               if s["name"] != "wallpaper-collection"])
+    merged = {s["name"]: s for s in nx.wallpaper_sources()}
+    assert merged["wallpaper-collection"]["url"].startswith("https://github.com/")   # default is back
+
+
+def test_human_size(nx):
+    assert nx._human_size(0) == "0 B"
+    assert nx._human_size(999) == "999 B"
+    assert nx._human_size(1024) == "1.0 KB"
+    assert nx._human_size(5 * 1024 * 1024) == "5.0 MB"
+
+
+def test_picker_package_loads(nx):
+    """The CLI drives the picker, so importing it is part of the contract."""
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    package = nx._wallpaper_package()
+    assert package is not None
+    backend, wallpaper_config, scanner = package
+    assert hasattr(backend, "apply_wallpaper")
+    # A throwaway HOME has no wallpaper roots yet; the resolver still answers.
+    assert isinstance(wallpaper_config.get_wallpaper_search_roots(), list)
+    assert isinstance(wallpaper_config.get_xdg_pictures_dir(), str)
+    assert scanner.WallpaperItem("/tmp/example.mp4").is_video
+    assert not scanner.WallpaperItem("/tmp/example.webp").is_video
+    assert scanner.WallpaperItem("/tmp/my_file-1.png").title == "my file 1"

@@ -28,6 +28,8 @@ PRESERVE=(
     "niri/__custom__.kdl"
     "niri/orbit-items__custom__.toml"
     "niri/effects.kdl"
+    # The wallpaper source list: shipped defaults, plus whatever the user adds.
+    "nyxdeck/wallpaper-sources.json"
     # The user's own shell additions live here; the rest of config.fish is ours
     # and does get refreshed.
     "fish/conf.d/__custom__.fish"

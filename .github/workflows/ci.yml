@@ -15,7 +15,7 @@ jobs:
         run: |
           pacman-key --init
           pacman-key --populate archlinux
-          pacman -Sy --noconfirm python python-pytest
+          pacman -Sy --noconfirm python python-pytest python-gobject
       - name: Python syntax
         run: |
           python -m py_compile nyxdeck

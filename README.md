@@ -301,6 +301,33 @@ Output is bilingual (zh / en), chosen from the locale (`LC_ALL`,
 `LC_MESSAGES`, `LANG`); set `NYXDECK_LANG=zh` or `en` to override. `install.sh`
 follows the same rule.
 
+### Wallpapers
+
+`nyxdeck wallpaper` is the one backend for wallpaper work: the GTK picker on
+`Mod+W` and (eventually) the bar plugin are front ends for it, so they cannot
+disagree about what a wallpaper is or how it is applied.
+
+```bash
+nyxdeck wallpaper status          # roots, counts, thumbnail cache, sources
+nyxdeck wallpaper list --json     # categories and items, for a UI front end
+nyxdeck wallpaper sources         # list | add <name> <url> [--mirror <url>] | remove <name>
+nyxdeck wallpaper download        # fetch a source; nothing is downloaded by default
+nyxdeck wallpaper set <file|#>    # static through DMS, video through mpvpaper
+nyxdeck wallpaper next            # a random one (--static / --video)
+nyxdeck wallpaper cache --clean   # drop the thumbnail cache
+```
+
+Wallpapers live where the picker already looks — `~/图片/Wallpapers` and
+`~/图片/Wallpapers/video` (or `~/Pictures/...`, `${NYXDECK_WALLPAPERS_DIR}`).
+The directory layout *is* the second level of the categories the panel shows:
+`All` / `Static` / `Live` on top, the subfolders underneath.
+
+Nothing is downloaded until you ask. The shipped source list
+(`configs/nyxdeck/wallpaper-sources.json`, copied once and then preserved) names
+one community collection plus a mirror for networks that need it; it declares no
+licence, which is exactly why it is a source you opt into rather than something
+we bundle. Add your own with `nyxdeck wallpaper sources add`.
+
 ## Verifying an installation
 
 Three levels of checking, none of which needs a graphical session.

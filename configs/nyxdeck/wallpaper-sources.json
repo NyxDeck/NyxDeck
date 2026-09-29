@@ -1,0 +1,10 @@
+{
+    "sources": [
+        {
+            "name": "wallpaper-collection",
+            "url": "https://github.com/ech678/wallpaper-collection.git",
+            "mirror": "https://gh-proxy.org/https://github.com/ech678/wallpaper-collection.git",
+            "note": "Community collection, no license declared. Nothing is fetched unless you run `nyxdeck wallpaper download`."
+        }
+    ]
+}

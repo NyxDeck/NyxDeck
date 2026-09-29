@@ -42,7 +42,7 @@ CORE_DEPS = [
     "niri", "dms-shell",
     "kitty", "fish", "starship", "fastfetch",
     "matugen", "cava", "qt6ct", "wtype",
-    "fzf", "wlsunset", "mpvpaper", "ffmpeg", "jq", "eza",
+    "fzf", "wlsunset", "mpvpaper", "ffmpeg", "jq", "eza", "git",
     "python-gobject", "gtk-layer-shell",
     "ttf-jetbrains-mono-nerd", "noto-fonts-cjk",
 ]
@@ -322,6 +322,453 @@ def cmd_deploy(argv: list[str]) -> int:
         err(t(f"{REPO} 里找不到 install.sh", f"install.sh not found in {REPO}"))
         return 1
     return subprocess.run([str(script), *argv]).returncode
+
+
+# ── wallpapers: the download chain, and one entry point for switching ────────
+#
+# The picker in configs/niri/scripts/wallpaper_picker owns discovery, the
+# thumbnails and the actual switch (static through DMS, video through mpvpaper).
+# Everything here goes through it, so the CLI, the GTK picker and the DMS plugin
+# cannot drift apart.
+
+WALLPAPER_SOURCES_FILE = CONFIG_HOME / "nyxdeck" / "wallpaper-sources.json"
+
+
+def _wallpaper_package():
+    """Import the picker package from the repository: (backend, config, scanner)."""
+    scripts = REPO / "configs" / "niri" / "scripts"
+    if not (scripts / "wallpaper_picker" / "scanner.py").is_file():
+        err(t("仓库里缺少 configs/niri/scripts/wallpaper_picker",
+              "configs/niri/scripts/wallpaper_picker is missing from the repository"))
+        return None
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from wallpaper_picker import backend, config as wallpaper_config, scanner
+    except Exception as exc:                       # gi, gdk-pixbuf, a stray typo
+        err(t(f"加载壁纸模块失败：{exc}", f"cannot load the wallpaper modules: {exc}"))
+        warn(t("先补齐依赖：nyxdeck deps", "install the dependencies first: nyxdeck deps"))
+        return None
+    return backend, wallpaper_config, scanner
+
+
+def wallpaper_sources() -> list[dict]:
+    """Shipped defaults with the user's own file on top, merged by name."""
+    merged: dict[str, dict] = {}
+    for path in (REPO / "configs" / "nyxdeck" / "wallpaper-sources.json",
+                 WALLPAPER_SOURCES_FILE):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            warn(f"{path}: {exc}")
+            continue
+        for entry in data.get("sources", []):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                merged[name] = entry
+    return [merged[name] for name in sorted(merged)]
+
+
+def _user_wallpaper_sources() -> list[dict]:
+    if not WALLPAPER_SOURCES_FILE.is_file():
+        return []
+    try:
+        return list(json.loads(WALLPAPER_SOURCES_FILE.read_text(encoding="utf-8"))
+                    .get("sources", []))
+    except (OSError, ValueError):
+        return []
+
+
+def save_wallpaper_sources(sources: list[dict]) -> None:
+    WALLPAPER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    WALLPAPER_SOURCES_FILE.write_text(
+        json.dumps({"sources": sources}, ensure_ascii=False, indent=4) + "\n",
+        encoding="utf-8")
+
+
+def _wallpaper_target(wallpaper_config) -> Path:
+    """Where a download lands: the same Pictures/Wallpapers the picker searches."""
+    override = os.environ.get("NYXDECK_WALLPAPERS_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path(wallpaper_config.get_xdg_pictures_dir()) / "Wallpapers"
+
+
+def _wallpaper_scanner(scanner):
+    scanner_ = scanner.WallpaperScanner()
+    scanner_.scan()
+    return scanner_
+
+
+def _wallpaper_item(scanner, path: Path):
+    """An item for an arbitrary file, so `set` works outside the search roots."""
+    if not path.is_file():
+        return None
+    return scanner.WallpaperItem(str(path), category=path.parent.name or "Wallpapers")
+
+
+def _wallpaper_view(item) -> dict:
+    return {
+        "title": item.title,
+        "path": item.path,
+        "file": item.filename,
+        "video": bool(item.is_video),
+        "category": item.category,
+        "group": "live" if item.is_video else "static",
+        "thumb": item.thumb_path,
+        "thumb_ready": os.path.isfile(item.thumb_path),
+        "size": item.size,
+        "mtime": item.mtime,
+    }
+
+
+def _wallpaper_collection_size(target: Path) -> int:
+    total = 0
+    if target.is_dir():
+        for path in target.rglob("*"):
+            try:
+                if path.is_file() and ".git" not in path.parts:
+                    total += path.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _wallpaper_cache_size(cache_dir: str) -> int:
+    total = 0
+    if os.path.isdir(cache_dir):
+        for name in os.listdir(cache_dir):
+            try:
+                total += os.path.getsize(os.path.join(cache_dir, name))
+            except OSError:
+                pass
+    return total
+
+
+def _human_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def _wallpaper_status(package, as_json: bool) -> int:
+    backend, wallpaper_config, scanner = package
+    roots = wallpaper_config.get_wallpaper_search_roots()
+    scan = _wallpaper_scanner(scanner)
+    items = scan.items
+    video = [i for i in items if i.is_video]
+    target = _wallpaper_target(wallpaper_config)
+    sources = wallpaper_sources()
+    installed = {source["name"]: (target / source["name"]).is_dir() for source in sources}
+    payload = {
+        "roots": roots,
+        "target": str(target),
+        "static": len(items) - len(video),
+        "video": len(video),
+        "categories": list(scan.categories),
+        "thumbnails": {"dir": scanner.CACHE_DIR,
+                       "bytes": _wallpaper_cache_size(scanner.CACHE_DIR)},
+        "sources": [{**source, "installed": installed.get(source["name"], False)}
+                    for source in sources],
+    }
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    say(t("壁纸", "Wallpapers"))
+    say(f"  {payload['static']} {t('张静态', 'static')} · "
+        f"{payload['video']} {t('个动态', 'live')} · "
+        f"{t('缩略图', 'thumbnails')} {_human_size(payload['thumbnails']['bytes'])}")
+    for root in roots:
+        say(f"  {MUTED}{root}{R}")
+    say("")
+    say(t("资源源", "Sources"))
+    if not sources:
+        warn(t("没有配置（nyxdeck wallpaper sources add）",
+               "none configured (nyxdeck wallpaper sources add)"))
+    for source in payload["sources"]:
+        state = t("已下载", "installed") if source["installed"] else t("未下载", "not downloaded")
+        say(f"  {source['name']}  —  {state}")
+        if source.get("note"):
+            say(f"      {MUTED}{source['note']}{R}")
+    return 0
+
+
+def _wallpaper_list(package, argv: list[str]) -> int:
+    backend, wallpaper_config, scanner = package
+    as_json = "--json" in argv
+    want = "live" if ("--video" in argv or "--live" in argv) else (
+        "static" if "--static" in argv else "all")
+    only = [argv[i + 1] for i, token in enumerate(argv)
+            if token == "--category" and i + 1 < len(argv)]
+    scan = _wallpaper_scanner(scanner)
+    items = scan.items
+    if want == "static":
+        items = [i for i in items if not i.is_video]
+    elif want == "live":
+        items = [i for i in items if i.is_video]
+    if only:
+        items = [i for i in items if i.category in only]
+    if as_json:
+        print(json.dumps({
+            "roots": wallpaper_config.get_wallpaper_search_roots(),
+            "categories": list(scan.categories),
+            "items": [_wallpaper_view(i) for i in items],
+        }, ensure_ascii=False, indent=2))
+        return 0
+    if not items:
+        warn(t("没有找到壁纸", "no wallpapers found"))
+        return 0
+    bucket = None
+    for item in sorted(items, key=lambda i: (i.category.lower(), i.title.lower())):
+        if item.category != bucket:
+            bucket = item.category
+            say(f"{ACCENT}{bucket}{R}")
+        kind = t("动态", "live") if item.is_video else t("静态", "static")
+        say(f"  {item.title}  {MUTED}{kind} · {_human_size(item.size)}{R}")
+        say(f"      {MUTED}{item.path}{R}")
+    return 0
+
+
+def _wallpaper_sources_cmd(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    positional = [a for a in argv if not a.startswith("-")]
+    action = positional[0] if positional else "list"
+    sources = wallpaper_sources()
+
+    if action in ("list", "show"):
+        if as_json:
+            print(json.dumps({"sources": sources}, ensure_ascii=False, indent=2))
+            return 0
+        if not sources:
+            warn(t("没有配置资源源", "no sources configured"))
+            return 0
+        for source in sources:
+            say(source["name"])
+            say(f"  {source['url']}")
+            if source.get("mirror"):
+                say(f"  {MUTED}{t('镜像', 'mirror')}: {source['mirror']}{R}")
+            if source.get("note"):
+                say(f"  {MUTED}{source['note']}{R}")
+        return 0
+
+    if action == "add":
+        rest = positional[1:]
+        if len(rest) < 2:
+            err(t("用法：nyxdeck wallpaper sources add <名字> <url> [--mirror <url>] [--note <文本>]",
+                  "usage: nyxdeck wallpaper sources add <name> <url> [--mirror <url>] [--note <text>]"))
+            return 2
+        name, url = rest[0], rest[1]
+        mirror = note = ""
+        for index, token in enumerate(argv):
+            if token == "--mirror" and index + 1 < len(argv):
+                mirror = argv[index + 1]
+            elif token == "--note" and index + 1 < len(argv):
+                note = argv[index + 1]
+        entry: dict = {"name": name, "url": url}
+        if mirror:
+            entry["mirror"] = mirror
+        if note:
+            entry["note"] = note
+        user = [s for s in _user_wallpaper_sources() if s["name"] != name]
+        user.append(entry)
+        save_wallpaper_sources(user)
+        ok(t(f"已添加源 {name}", f"source {name} added"))
+        return 0
+
+    if action in ("remove", "rm", "delete"):
+        rest = positional[1:]
+        if not rest:
+            err(t("用法：nyxdeck wallpaper sources remove <名字>",
+                  "usage: nyxdeck wallpaper sources remove <name>"))
+            return 2
+        name = rest[0]
+        save_wallpaper_sources([s for s in _user_wallpaper_sources() if s["name"] != name])
+        ok(t(f"已移除 {name}（仓库里的默认源不受影响）",
+             f"{name} removed (the defaults in the repository are untouched)"))
+        return 0
+
+    err(t(f"未知操作：{action}（list | add | remove）",
+          f"unknown action: {action} (list | add | remove)"))
+    return 2
+
+
+def _wallpaper_download(package, argv: list[str]) -> int:
+    backend, wallpaper_config, scanner = package
+    as_json = "--json" in argv
+    dry_run = "--dry-run" in argv
+    use_mirror = "--mirror" in argv
+    names = [a for a in argv if not a.startswith("-")]
+    sources = [s for s in wallpaper_sources() if not names or s["name"] in names]
+    if not sources:
+        err(t("没有匹配的资源源", "no matching source"))
+        return 1
+    target = _wallpaper_target(wallpaper_config)
+    results = []
+    for source in sources:
+        dest = target / source["name"]
+        url = source["mirror"] if use_mirror and source.get("mirror") else source["url"]
+        if dest.is_dir():
+            results.append({"name": source["name"], "status": "present", "path": str(dest)})
+            continue
+        if dry_run:
+            results.append({"name": source["name"], "status": "would-download", "url": url,
+                            "path": str(dest)})
+            continue
+        if not have("git"):
+            err(t("需要 git：nyxdeck deps", "git is required: nyxdeck deps"))
+            return 1
+        # git clone creates the target, not its parents; a machine without a
+        # Wallpapers directory yet would otherwise fail here.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        say(t(f"下载 {source['name']} → {dest}", f"downloading {source['name']} → {dest}"))
+        res = subprocess.run(["git", "clone", "--depth", "1", "--progress", url, str(dest)],
+                             check=False)
+        if res.returncode != 0 and source.get("mirror") and url != source["mirror"]:
+            warn(t("主源失败，改用镜像", "the primary failed, falling back to the mirror"))
+            res = subprocess.run(["git", "clone", "--depth", "1", "--progress",
+                                  source["mirror"], str(dest)], check=False)
+        if res.returncode != 0:
+            results.append({"name": source["name"], "status": "failed", "url": url})
+            continue
+        results.append({"name": source["name"], "status": "downloaded", "path": str(dest),
+                        "bytes": _wallpaper_collection_size(dest)})
+    if as_json:
+        print(json.dumps({"target": str(target), "results": results},
+                         ensure_ascii=False, indent=2))
+    else:
+        for result in results:
+            if result["status"] == "present":
+                ok(t(f"{result['name']} 已存在", f"{result['name']} is already there"))
+            elif result["status"] == "would-download":
+                say(t(f"将下载 {result['name']} ← {result['url']}",
+                      f"would download {result['name']} ← {result['url']}"))
+            elif result["status"] == "downloaded":
+                ok(t(f"{result['name']} 完成（{_human_size(result['bytes'])}）",
+                     f"{result['name']} done ({_human_size(result['bytes'])})"))
+            else:
+                err(t(f"{result['name']} 下载失败", f"{result['name']} failed"))
+    return 0 if all(r["status"] != "failed" for r in results) else 1
+
+
+def _wallpaper_apply(package, argv: list[str]) -> int:
+    backend, wallpaper_config, scanner = package
+    as_json = "--json" in argv
+    dry_run = "--dry-run" in argv
+    positional = [a for a in argv if not a.startswith("-")]
+    if not positional:
+        err(t("用法：nyxdeck wallpaper set <文件|序号>",
+              "usage: nyxdeck wallpaper set <file|index>"))
+        return 2
+    wanted = positional[0]
+    scan = _wallpaper_scanner(scanner)
+    items = scan.items
+    item = items[int(wanted) - 1] if (wanted.isdigit() and 1 <= int(wanted) <= len(items)) \
+        else _wallpaper_item(scanner, Path(wanted).expanduser())
+    if item is None:
+        err(t(f"找不到壁纸：{wanted}", f"no such wallpaper: {wanted}"))
+        return 1
+    view = _wallpaper_view(item)
+    if dry_run:
+        if as_json:
+            print(json.dumps({"would_apply": view}, ensure_ascii=False, indent=2))
+        else:
+            say(t(f"将应用 {view['title']}（{'动态' if view['video'] else '静态'}）",
+                  f"would apply {view['title']} ({'live' if view['video'] else 'static'})"))
+        return 0
+    # A video needs a still frame for DMS' colour extraction. The scanner only
+    # generates those in a worker thread, so run that worker for this one item.
+    if item.is_video and not os.path.isfile(item.thumb_path):
+        scanner.WallpaperScanner._generate_thumbnail_worker(None, item)
+    applied = backend.apply_wallpaper(item)
+    if as_json:
+        print(json.dumps({"applied": applied, "item": view}, ensure_ascii=False, indent=2))
+    elif applied:
+        ok(t(f"已应用 {view['title']}", f"applied {view['title']}"))
+    else:
+        err(t("应用失败", "applying failed"))
+    return 0 if applied else 1
+
+
+def _wallpaper_next(package, argv: list[str]) -> int:
+    import random
+    backend, wallpaper_config, scanner = package
+    scan = _wallpaper_scanner(scanner)
+    items = scan.items
+    if "--video" in argv or "--live" in argv:
+        items = [i for i in items if i.is_video]
+    elif "--static" in argv:
+        items = [i for i in items if not i.is_video]
+    if not items:
+        err(t("没有可切换的壁纸", "nothing to switch to"))
+        return 1
+    return _wallpaper_apply(package, [random.choice(items).path] +
+                            [a for a in argv if a in ("--json", "--dry-run")])
+
+
+def _wallpaper_cache(argv: list[str]) -> int:
+    package = _wallpaper_package()
+    if package is None:
+        return 1
+    _, _, scanner = package
+    cache_dir = scanner.CACHE_DIR
+    as_json = "--json" in argv
+    if "--clean" in argv:
+        removed = 0
+        if os.path.isdir(cache_dir):
+            for name in os.listdir(cache_dir):
+                try:
+                    os.remove(os.path.join(cache_dir, name))
+                    removed += 1
+                except OSError:
+                    pass
+        if as_json:
+            print(json.dumps({"cleaned": removed}, ensure_ascii=False, indent=2))
+        else:
+            ok(t(f"清理了 {removed} 个缩略图", f"removed {removed} thumbnail(s)"))
+        return 0
+    size = _wallpaper_cache_size(cache_dir)
+    count = len(os.listdir(cache_dir)) if os.path.isdir(cache_dir) else 0
+    if as_json:
+        print(json.dumps({"dir": cache_dir, "files": count, "bytes": size},
+                         ensure_ascii=False, indent=2))
+    else:
+        say(f"{cache_dir}  —  {count} {t('个文件', 'files')} · {_human_size(size)}")
+    return 0
+
+
+def cmd_wallpaper(argv: list[str]) -> int:
+    """Wallpaper collection, sources and switching — one backend for every UI."""
+    positional = [a for a in argv if not a.startswith("-")]
+    action = positional[0] if positional else "status"
+
+    if action == "cache":
+        return _wallpaper_cache(argv[1:])
+
+    package = _wallpaper_package()
+    if package is None:
+        return 1
+
+    if action in ("status", "show"):
+        return _wallpaper_status(package, "--json" in argv)
+    if action in ("list", "ls"):
+        return _wallpaper_list(package, argv[1:])
+    if action in ("sources", "source"):
+        return _wallpaper_sources_cmd(argv[1:])
+    if action in ("download", "get"):
+        return _wallpaper_download(package, argv[1:])
+    if action in ("set", "apply"):
+        return _wallpaper_apply(package, argv[1:])
+    if action == "next":
+        return _wallpaper_next(package, argv[1:])
+
+    err(t(f"未知操作：{action}（status | list | sources | download | set | next | cache）",
+          f"unknown action: {action} (status | list | sources | download | set | next | cache)"))
+    return 2
 
 
 # `verify` is the stage the pipeline was missing: install → update → verify →
@@ -2043,6 +2490,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
+    sub.add_parser("wallpaper", help=t("壁纸与资源：status | list [--json] | sources [add|remove] | download [名字] | set <文件|序号> | next | cache",
+        "wallpapers and resources: status | list [--json] | sources [add|remove] | download [name] | set <file|index> | next | cache"))
     sub.add_parser("setup", help=t("一键安装全套链路：依赖 → 配置 → 插件 → Mihomo（--dry-run/--no-mihomo/--no-plugins/--no-deps）",
                                     "one-shot setup: deps → configuration → plugins → Mihomo (--dry-run/--no-mihomo/--no-plugins/--no-deps)"))
     sub.add_parser("update", help=t("从 git 更新并重新部署（含声明的插件）",
@@ -2094,6 +2543,8 @@ def main(argv: list[str]) -> int:
         return cmd_plugin(rest)
     if command == "mihomo":
         return cmd_mihomo(rest)
+    if command == "wallpaper":
+        return cmd_wallpaper(rest)
     if command == "setup":
         return cmd_setup(rest)
     if command == "update":
