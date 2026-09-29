@@ -11,15 +11,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
+import unicodedata
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+HOME = Path.home()
 REPO = Path(os.path.realpath(__file__)).parent
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
 DMS_DIR = CONFIG_HOME / "DankMaterialShell"
 PLUGIN_DIR = DMS_DIR / "plugins"
 SETTINGS = DMS_DIR / "settings.json"
@@ -354,6 +358,16 @@ def cmd_doctor(_: list[str]) -> int:
     else:
         warn(t("本地面板未就绪（nyxdeck mihomo dashboard）",
                "local dashboard not ready (nyxdeck mihomo dashboard)"))
+
+    say("\n" + t("shell 层", "Shell layer"))
+    for relative, _ in SHELL_FILES:
+        state, detail = _shell_state(relative)
+        if state == "ok":
+            ok(relative)
+        else:
+            warn(f"{relative}  —  {detail}")
+    for path, label in _leftovers():
+        warn(t(f"遗留：{path}（{label}）", f"leftover: {path} ({label})"))
 
     if not have("fzf"):
         warn(t("fzf 未安装（Logo / 标语选择器会退化为逐项菜单，可选）",
@@ -1205,6 +1219,276 @@ def pick_tagline() -> int:
     return cmd_tagline([value])
 
 
+# ── Shell layer ──────────────────────────────────────────────────────────────
+# The shell layer this repository owns: what it deploys and how to tell it is
+# NyxDeck's, plus the leftovers worth reporting.
+
+SHELL_DIR = CONFIG_HOME / "fish"
+SHELL_CONF_D = SHELL_DIR / "conf.d"
+CUSTOM_FISH = SHELL_CONF_D / "__custom__.fish"
+CLEAN_SCRIPT = REPO / "configs" / "fish" / "clean-cache.py"
+BINDS_FILE = CONFIG_HOME / "niri" / "binds.kdl"
+
+# What this repository owns in the shell layer, and how to tell it is in place.
+SHELL_FILES = [
+    ("fish/config.fish", t("shell 配置（别名、代理、包管理助手）",
+                           "shell configuration (aliases, proxy, package helpers)")),
+    ("fish/clean-cache.py", t("缓存清理（nyxdeck clean / alias clean）",
+                              "cache cleaner (nyxdeck clean / alias clean)")),
+    ("fish/conf.d/__custom__.fish", t("私有改动入口（部署时保留）",
+                                      "private tweaks entry (preserved on deploy)")),
+    ("fish/conf.d/nyxdeck-path.fish", t("PATH", "PATH")),
+    ("fish/conf.d/nyxdeck-fetch.fish", t("终端面板钩子", "welcome panel hook")),
+    ("fish/conf.d/nyxdeck-starship.fish", t("提示符钩子", "prompt hook")),
+    ("starship.toml", t("提示符布局（布局属我们，调色板归 matugen）",
+                        "prompt layout (ours; the palette block is matugen's)")),
+]
+
+# Legacy entries worth reporting.
+LEFTOVERS = [
+    (CONFIG_HOME / "fish/conf.d/nyxdeck-path.fish", t("PATH 钩子", "PATH hook")),
+    (CONFIG_HOME / "noctalia", t("Noctalia 配置目录", "Noctalia configuration directory")),
+    (CONFIG_HOME / "niri/scripts/start-noctalia.sh", t("启动 Noctalia 的脚本", "Noctalia launcher script")),
+    (STATE_HOME / "noctalia", t("Noctalia 状态目录", "Noctalia state directory")),
+]
+
+
+def _shell_state(relative: str) -> tuple[str, str]:
+    """(state, detail) for a file this repository owns."""
+    dst = CONFIG_HOME / relative
+    src = REPO / "configs" / relative
+    if not src.is_file():
+        return "unknown", t("仓库里没有", "not in the repository")
+    if not dst.exists():
+        return "missing", t("未部署", "not deployed")
+    if relative == "starship.toml":
+        # Merged at deploy time, so compare meaning rather than bytes.
+        text = dst.read_text(encoding="utf-8", errors="replace")
+        ok = 'palette = "dms"' in text and "PALETTE >>>" in text
+        return ("ok" if ok else "drift"), t("已部署（合并布局与调色板）",
+                                            "deployed (layout merged with palette)")
+    same = _same_content(src, dst)
+    if same:
+        return "ok", t("已部署，与仓库一致", "deployed and matches the repository")
+    return "drift", t("已部署但被改动过", "deployed but modified")
+
+
+def _same_content(src: Path, dst: Path) -> bool:
+    try:
+        a = src.read_text(encoding="utf-8").replace("/home/user", str(HOME))
+        b = dst.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return a == b
+
+
+def _leftovers() -> list[tuple[Path, str]]:
+    found = [(path, label) for path, label in LEFTOVERS if path.exists()]
+    found += [(path, t("旧的 niri 配置备份", "old niri configuration backup"))
+              for path in sorted(CONFIG_HOME.glob("niri.bak-*"))]
+    return found
+
+
+def cmd_shell(argv: list[str]) -> int:
+    action = argv[0] if argv else "status"
+
+    if action in ("status", "show"):
+        say(t("shell 层", "shell layer"))
+        for relative, label in SHELL_FILES:
+            state, detail = _shell_state(relative)
+            line = f"{relative}  —  {detail}"
+            {"ok": ok, "drift": warn, "missing": warn}.get(state, warn)(line)
+            say(f"      {label}")
+        leftovers = _leftovers()
+        if leftovers:
+            say("")
+            warn(t(f"遗留 {len(leftovers)} 项（nyxdeck shell doctor 查看）",
+                   f"{len(leftovers)} legacy leftovers (see nyxdeck shell doctor)"))
+        return 0
+
+    if action == "doctor":
+        say(t("shell 层体检", "shell layer check"))
+        problems = 0
+        for relative, _ in SHELL_FILES:
+            state, detail = _shell_state(relative)
+            if state == "ok":
+                ok(f"{relative}")
+            else:
+                warn(f"{relative}  —  {detail}")
+                problems += 1
+        say("")
+        if have("starship"):
+            ok(t("starship 已安装", "starship installed"))
+        else:
+            warn(t("starship 未安装（提示符不会生效）", "starship is missing (no prompt)"))
+            problems += 1
+        cfg = SHELL_DIR / "config.fish"
+        if cfg.is_file() and "_nyxdeck_pkg_helper" in cfg.read_text(encoding="utf-8", errors="replace"):
+            ok(t("config.fish 是 NyxDeck 版本", "config.fish is the NyxDeck version"))
+        else:
+            warn(t("config.fish 还是旧版本（跑 nyxdeck shell install）",
+                   "config.fish is not the NyxDeck version (run nyxdeck shell install)"))
+            problems += 1
+        plugins = (SHELL_DIR / "fish_plugins")
+        if plugins.is_file():
+            ok(t(f"fisher 插件声明 {len(plugins.read_text().split())} 个",
+                 f"{len(plugins.read_text().split())} fisher plugins declared"))
+        for path, label in _leftovers():
+            warn(t(f"遗留：{path}（{label}）", f"leftover: {path} ({label})"))
+            problems += 1
+        say("")
+        if problems == 0:
+            ok(t("shell 层干净", "shell layer is clean"))
+        return 0
+
+    if action == "install":
+        script = REPO / "install.sh"
+        if not script.is_file():
+            err(t("找不到 install.sh", "install.sh not found"))
+            return 1
+        return subprocess.run([str(script), "install"]).returncode
+
+    if action == "edit":
+        if not CUSTOM_FISH.is_file():
+            warn(t(f"{CUSTOM_FISH} 还不存在（先 nyxdeck shell install）",
+                   f"{CUSTOM_FISH} does not exist yet (run nyxdeck shell install)"))
+            return 1
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+        if not sys.stdin.isatty():
+            say(str(CUSTOM_FISH))
+            return 0
+        return subprocess.run([editor, str(CUSTOM_FISH)]).returncode
+
+    err(t(f"未知的 shell 操作: {action}（status | doctor | install | edit）",
+          f"unknown shell action: {action} (status | doctor | install | edit)"))
+    return 2
+
+
+def cmd_clean(argv: list[str]) -> int:
+    script = CLEAN_SCRIPT if CLEAN_SCRIPT.is_file() else SHELL_DIR / "clean-cache.py"
+    if not script.is_file():
+        err(t("找不到 clean-cache.py", "clean-cache.py not found"))
+        return 1
+    return subprocess.run([sys.executable or "python3", str(script), *argv]).returncode
+
+
+# ── Help / cheatsheet ────────────────────────────────────────────────────────
+
+# Keybindings worth listing even though they do not spawn one of our scripts.
+CORE_BINDS = [
+    ("Mod+Return", lambda: t("终端", "terminal")),
+    ("Mod+Q", lambda: t("关闭窗口", "close the window")),
+    ("Mod+Tab", lambda: t("工作区概览", "workspace overview")),
+    ("Mod+Shift+Q", lambda: t("退出会话菜单", "session menu")),
+    ("Mod+F", lambda: t("最大化列宽", "maximise the column")),
+    ("Mod+Shift+F", lambda: t("全屏", "fullscreen")),
+    ("Mod+L", lambda: t("锁屏", "lock the screen")),
+    ("Mod+Shift+S", lambda: t("区域截图", "region screenshot")),
+    ("Mod+Shift+R", lambda: t("重载桌面配置", "reload the desktop config")),
+    ("Mod+Slash", lambda: t("niri 按键覆盖层", "niri hotkey overlay")),
+]
+
+# Our own scripts, so the cheatsheet says something friendlier than a path.
+SCRIPT_LABELS = {
+    "wallpaper-picker.py": lambda: t("壁纸选择器（静态 + 动态）", "wallpaper picker (static + live)"),
+    "orbit-launcher.py": lambda: t("Orbit 星环启动器", "Orbit radial launcher"),
+    "niri-scratch-toggle.sh": lambda: t("浮动便签终端", "scratchpad terminal"),
+    "toggle-eyecare.sh": lambda: t("护眼暖色温", "eye-care colour temperature"),
+    "media-control.sh": lambda: t("媒体控制", "media control"),
+    "niri-brightness.sh": lambda: t("亮度调节", "brightness"),
+    "wallpaper-random.sh": lambda: t("随机换壁纸", "random wallpaper"),
+}
+
+SHELL_HELPERS = [
+    ("nyxdeck", t("控制面板（无参数）与体检", "control panel (no arguments) and doctor")),
+    ("nyxdeck help", t("这份速查表（别名 nyxhelp）", "this cheatsheet (alias nyxhelp)")),
+    ("nyxdeck fetch", t("终端欢迎面板", "terminal welcome panel")),
+    ("nyxdeck logo / tagline", t("面板图形与标语", "panel mark and tagline")),
+    ("nyxdeck shell", t("shell 层状态 / 体检 / 部署 / 编辑私有配置",
+                        "shell layer status / doctor / install / edit private file")),
+    ("nyxdeck clean", t("缓存清理（别名 clean）", "cache cleaner (alias clean)")),
+    ("proxy_on / proxy_off / proxy_status", t("终端代理开关与连通性测试",
+                                              "terminal proxy toggle and connectivity test")),
+    ("up / in / se / un", t("更新 / 安装 / 搜索 / 卸载软件包",
+                            "update / install / search / remove packages")),
+]
+
+
+def _niri_binds() -> list[tuple[str, str]]:
+    """(binding, command) parsed from the niri configuration in use."""
+    try:
+        text = BINDS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    pattern = re.compile(r"^\s*([A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*)\s+(?:[a-z-]+=\S+\s+)*\{\s*(.+?)\s*\}\s*$")
+    binds = []
+    for line in text.splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        quoted = re.search(r'"([^"]+)"', match.group(2))
+        binds.append((match.group(1), quoted.group(1) if quoted else match.group(2)))
+    return binds
+
+
+def _pad(text: str, width: int) -> str:
+    """Pad to a cell width; CJK counts as two columns or the columns wobble."""
+    cells = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+    return text + " " * max(1, width - cells)
+
+
+def cmd_help(_: list[str]) -> int:
+    parser = build_parser()
+    sub = next((a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None)
+    entries = [(action.dest, action.help or "") for action in (sub._choices_actions if sub else [])]
+
+    say(t("NyxDeck 命令", "NyxDeck commands"))
+    for name, help_text in entries:
+        say(f"  {ACCENT}{_pad(name, 11)}{R}{help_text}")
+    say("")
+    say(t("shell 助手", "shell helpers"))
+    for name, help_text in SHELL_HELPERS:
+        say(f"  {ACCENT}{_pad(name, 36)}{R}{help_text}")
+
+    binds = _niri_binds()
+    if binds:
+        by_bind = dict(binds)
+        say("")
+        say(t("桌面快捷键", "desktop keybindings"))
+        for bind, describe in CORE_BINDS:
+            if bind in by_bind:
+                say(f"  {ACCENT}{_pad(bind, 17)}{R}{describe()}")
+        for bind, command in binds:
+            label = SCRIPT_LABELS.get(Path(command).name)
+            if label:
+                say(f"  {ACCENT}{_pad(bind, 17)}{R}{label()}")
+    return 0
+
+
+def shell_menu() -> None:
+    while True:
+        items = [
+            t("状态（每份文件的部署情况）", "status (deployment state of each file)"),
+            t("体检（含 遗留检查）", "doctor (including leftovers from earlier setups)"),
+            t("部署 shell 层", "deploy the shell layer"),
+            t("编辑私有配置 __custom__.fish", "edit the private __custom__.fish"),
+            t("返回", "Back"),
+        ]
+        choice = _menu(t("shell 层 / Shell", "Shell layer"), items)
+        if choice is None or choice == 4:
+            return
+        clear_screen()
+        if choice == 0:
+            cmd_shell(["status"])
+        elif choice == 1:
+            cmd_shell(["doctor"])
+        elif choice == 2:
+            cmd_shell(["install"])
+        elif choice == 3:
+            cmd_shell(["edit"])
+        _press_any_key()
+
+
 def logo_menu() -> None:
     while True:
         items = [
@@ -1247,11 +1531,13 @@ def main_menu() -> int:
             t("终端面板", "Terminal panel"),
             t("标语 / Tagline", "Tagline"),
             t("Logo", "Logo"),
+            t("shell 层", "Shell layer"),
+            t("速查表（nyxhelp）", "Cheatsheet (nyxhelp)"),
             t("语言 / Language", "Language"),
             t("退出", "Exit"),
         ]
         choice = _menu(t("控制面板", "Control panel"), items)
-        if choice is None or choice == 10:
+        if choice is None or choice == 12:
             return 0
         clear_screen()
         if choice == 0:
@@ -1278,6 +1564,13 @@ def main_menu() -> int:
             logo_menu()
             continue
         elif choice == 9:
+            shell_menu()
+            continue
+        elif choice == 10:
+            clear_screen()
+            show_logo()
+            cmd_help([])
+        elif choice == 11:
             select_language()
             continue
         _press_any_key()
@@ -1300,6 +1593,11 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
+    sub.add_parser("shell", help=t("shell 层：status | doctor | install | edit",
+                                   "shell layer: status | doctor | install | edit"))
+    sub.add_parser("clean", help=t("缓存清理（clean-cache.py）", "cache cleaner (clean-cache.py)"))
+    sub.add_parser("help", help=t("速查表：命令 + 桌面快捷键 + shell 助手",
+                                  "cheatsheet: commands, keybindings, shell helpers"))
     sub.add_parser("logo", help=t("面板 Logo：pick（实时预览/可过滤）| show | list [过滤] | preview [名字] | set <名字|文件> | --reset",
                                   "panel logo: pick (live preview, filter) | show | list [filter] | preview [name] | set <name|file> | --reset"))
     sub.add_parser("tagline", help=t("NYX DECK 标语：pick（实时预览）| <文本> | --reset | --blank | show",
@@ -1338,6 +1636,12 @@ def main(argv: list[str]) -> int:
         return cmd_plugin(rest)
     if command == "mihomo":
         return cmd_mihomo(rest)
+    if command in ("help", "cheatsheet"):
+        return cmd_help(rest)
+    if command == "shell":
+        return cmd_shell(rest)
+    if command == "clean":
+        return cmd_clean(rest)
     if command == "logo":
         return cmd_logo(rest)
     if command == "tagline":

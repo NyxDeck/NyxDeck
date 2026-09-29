@@ -1,0 +1,375 @@
+if test -f /usr/share/cachyos-fish-config/cachyos-config.fish
+    source /usr/share/cachyos-fish-config/cachyos-config.fish
+end
+
+# 代理配置 (Proxy Configuration) — 修改此处以适配你的代理端口
+set -g PROXY_ADDR "127.0.0.1:7890"
+
+# 开启代理 (支持自定义端口或地址，如: proxy_on 10808 或 proxy_on 192.168.1.5:7890)
+function proxy_on
+    set -l addr "$PROXY_ADDR"
+    if test (count $argv) -gt 0
+        if string match -r '^\d+$' -- $argv[1]
+            set addr "127.0.0.1:$argv[1]"
+        else
+            set addr "$argv[1]"
+        end
+    end
+
+    set -gx http_proxy "http://$addr"
+    set -gx https_proxy "http://$addr"
+    set -gx all_proxy "socks5://$addr"
+    set -gx HTTP_PROXY "http://$addr"
+    set -gx HTTPS_PROXY "http://$addr"
+    set -gx ALL_PROXY "socks5://$addr"
+    echo "[+] 终端代理已开启 (Proxy: $addr)"
+end
+
+# 关闭代理
+function proxy_off
+    set -e http_proxy
+    set -e https_proxy
+    set -e all_proxy
+    set -e HTTP_PROXY
+    set -e HTTPS_PROXY
+    set -e ALL_PROXY
+    echo "[-] 终端代理已关闭"
+end
+
+# 查看代理状态
+function proxy_status
+    echo "--- 代理环境变量 (Proxy Env) ---"
+    for var in http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+        if set -q $var
+            echo "$var: "$$var
+        else
+            echo "$var: [未设置]"
+        end
+    end
+
+    echo ""
+    echo "--- 连通性测试 (Connectivity) ---"
+    echo -n "测试 Google.com... "
+    set -l start (date +%s%3N)
+    set -l code (curl -I -s --connect-timeout 3 -o /dev/null -w "%{http_code}" https://www.google.com 2>/dev/null)
+    set -l end (date +%s%3N)
+    if test "$code" = "200" -o "$code" = "301" -o "$code" = "302"
+        set -l duration (math $end - $start)
+        echo "成功 (HTTP $code, $duration ms)"
+    else
+        echo "失败"
+    end
+
+    echo -n "测试 GitHub.com... "
+    set -l gh_start (date +%s%3N)
+    set -l gh_code (curl -I -s --connect-timeout 3 -o /dev/null -w "%{http_code}" https://github.com 2>/dev/null)
+    set -l gh_end (date +%s%3N)
+    if test "$gh_code" = "200" -o "$gh_code" = "301" -o "$gh_code" = "302"
+        set -l gh_duration (math $gh_end - $gh_start)
+        echo "成功 (HTTP $gh_code, $gh_duration ms)"
+    else
+        echo "失败"
+    end
+
+    echo ""
+    echo "--- IP 地理位置 (IP Location) ---"
+    curl -s --connect-timeout 3 -m 3 cip.cc 2>/dev/null | head -n 3
+end
+
+function ask_agy
+    proxy_on
+    agy $argv
+end
+
+# 私有包管理器感知助手 (Paru > Yay > Shelly > Pacman)
+function _nyxdeck_pkg_helper
+    if command -v paru &>/dev/null
+        echo "paru"
+    else if command -v yay &>/dev/null
+        echo "yay"
+    else if command -v shelly &>/dev/null
+        echo "shelly"
+    else
+        echo "pacman"
+    end
+end
+
+# 私有搜索分流助手 (供 se 交互及 fzf change 动态 reload)
+function _nyxdeck_se_search --argument-names query helper
+    set -l input (string trim -- "$query")
+    set -l parts (string split -n -m 1 " " -- "$input")
+    set -l cmd "$parts[1]"
+    set -l kw "$parts[2]"
+
+    switch "$cmd"
+        case aur
+            if test -n "$kw"
+                # AUR 在线搜索: paru/yay 直接搜, shelly 走 JSON; 失败时透传 helper 原话, 不再静默空
+                set -l aur_helper
+                if test "$helper" = "paru" -o "$helper" = "yay"
+                    set aur_helper "$helper"
+                else if command -v shelly &>/dev/null
+                    set aur_helper shelly
+                end
+
+                if test -z "$aur_helper"
+                    echo "[!] AUR search requires paru/yay/shelly" >&2
+                    return 1
+                end
+
+                set -l results
+                if test "$aur_helper" = shelly
+                    set results (shelly search aur -j "$kw" 2>/dev/null \
+                        | string match -a -r '"Name":"[^"]+"' | awk -F'"' '{print "[AUR] "$4}')
+                else
+                    set results ("$aur_helper" -Ssq --aur "$kw" 2>/dev/null | awk '{print "[AUR] "$0}')
+                end
+                set -l search_st $pipestatus[1]
+
+                if test -n "$results"
+                    printf '%s\n' $results
+                else if test $search_st -ne 0
+                    # 无匹配同样退出非零, 只有拿到 helper 原话才算真失败 (paru 报错在 stderr, shelly 在 stdout)
+                    set -l why
+                    if test "$aur_helper" = shelly
+                        set why (shelly search aur -j "$kw" 2>/dev/null | head -1)
+                    else
+                        set why ("$aur_helper" -Ssq --aur "$kw" 2>&1 >/dev/null | head -1)
+                    end
+                    if test -n "$why"
+                        echo "[!] $why" >&2
+                        return 1
+                    end
+                end
+            end
+        case pac repo
+            if test -n "$kw"
+                pacman -Slq | grep -i -- "$kw" | awk '{print "[PAC] "$0}' || true
+            else
+                pacman -Slq | awk '{print "[PAC] "$0}' || true
+            end
+        case '*'
+            if test -n "$input"
+                pacman -Slq | grep -i -- "$input" | awk '{print "[PAC] "$0}' || true
+            else
+                pacman -Slq | awk '{print "[PAC] "$0}' || true
+            end
+    end
+end
+
+if status is-interactive
+    # CachyOS ships `function fish_greeting; fastfetch; end`, and `set
+    # fish_greeting` only clears a *variable* — it does not remove a function,
+    # so that fetch would run next to NyxDeck's own panel. Remove the function.
+    functions -q fish_greeting; and functions -e fish_greeting
+
+    # Tab 智能自动补全：优先采纳灰色历史建议，无建议时触发 Tab 列表补全
+    # 注：必须用 commandline --showing-suggestion 判断，不能用 -f accept-autosuggestion
+    # （后者只是把动作塞进队列并恒返回 true，会导致 else 分支永不执行、文件补全失效）
+    function custom_tab_complete
+        if commandline --showing-suggestion
+            commandline -f accept-autosuggestion
+        else
+            commandline -f complete
+        end
+    end
+
+    function fish_user_key_bindings
+        # 绑定 Tab 键
+        bind \t custom_tab_complete
+        # Ctrl+V 粘贴系统剪贴板（fzf.fish 默认把 Ctrl+V 占用为变量搜索，此处覆盖回粘贴；
+        # fish_user_key_bindings 在插件绑定之后执行，覆盖是时序保证的）
+        bind \cv fish_clipboard_paste
+        bind -M insert \cv fish_clipboard_paste
+    end
+
+    # Use starship prompt (Disable in pure TTY to avoid Nerd Font square boxes)
+    if test "$TERM" != "linux"; and command -v starship &>/dev/null
+        starship init fish | source
+    end
+
+    # Aliases
+    # The cheatsheet lives in the CLI so it cannot go stale: commands come from
+    # the parser, keybindings from the niri configuration in use.
+    alias nyxhelp 'nyxdeck help'
+    alias clear "printf '\033[2J\033[3J\033[1;1H'" # fix: kitty doesn't clear scrollback properly
+    alias celar "printf '\033[2J\033[3J\033[1;1H'"
+    alias claer "printf '\033[2J\033[3J\033[1;1H'"
+
+    # 智能一键更新 (优先 paru/yay，自动防中途取消误触发)
+    function up --description "一键系统与软件包更新 (Arch / CachyOS)"
+        set -l helper (_nyxdeck_pkg_helper)
+        set -l res 0
+
+        switch "$helper"
+            case paru
+                paru -Syu $argv
+                set res $status
+            case yay
+                yay -Syu $argv
+                set res $status
+            case shelly
+                shelly upgrade all $argv
+                set res $status
+            case '*'
+                sudo pacman -Syu $argv
+                set res $status
+        end
+
+        # 用户按 Ctrl+C / SIGINT (130) 或 SIGTERM (143) 取消操作时，安静退出
+        if test $res -eq 130 -o $res -eq 143
+            set_color yellow; echo "[!] 更新操作已由用户取消"; set_color normal
+            return 130
+        end
+
+        if test $res -ne 0 -a "$helper" = "shelly"
+            set_color yellow; echo "[!] Shelly 更新遇到异常，尝试使用备用包管理器..."; set_color normal
+            if command -v paru &>/dev/null
+                paru -Syu $argv
+            else if command -v yay &>/dev/null
+                yay -Syu $argv
+            else
+                sudo pacman -Syu $argv
+            end
+        end
+    end
+    alias update='up'                             # 同上，完整拼写
+
+    # 智能安装 (无参自动触发 se 模糊搜索)
+    function in --description "智能安装软件包 (支持包名或交互搜索)"
+        if test (count $argv) -eq 0
+            se
+            return
+        end
+
+        set -l helper (_nyxdeck_pkg_helper)
+        set -l res 0
+
+        switch "$helper"
+            case paru
+                paru -S $argv
+                set res $status
+            case yay
+                yay -S $argv
+                set res $status
+            case shelly
+                shelly install $argv
+                set res $status
+            case '*'
+                sudo pacman -S $argv
+                set res $status
+        end
+
+        if test $res -eq 130 -o $res -eq 143
+            set_color yellow; echo "[!] 安装操作已由用户取消"; set_color normal
+            return 130
+        end
+
+        if test $res -ne 0 -a "$helper" = "shelly"
+            set_color yellow; echo "[!] Shelly 安装遇到异常，尝试使用备用包管理器..."; set_color normal
+            if command -v paru &>/dev/null
+                paru -S $argv
+            else if command -v yay &>/dev/null
+                yay -S $argv
+            else
+                sudo pacman -S $argv
+            end
+        end
+    end
+
+    alias clean='~/.config/fish/clean-cache.py'      # 运行一键缓存清理脚本
+
+    # se：模糊搜索软件包 (支持 aur <kw> / pac <kw> 前缀) 并用 fzf 交互安装 (无 fzf 时自动降级)
+    function se --description "Fuzzy search & install packages (aur/pac prefix)"
+        set -l helper (_nyxdeck_pkg_helper)
+
+        # 无 fzf 时的降级处理
+        if not command -v fzf &>/dev/null
+            set_color yellow; echo "[!] fzf not found, falling back to plain search"; set_color normal
+            switch "$helper"
+                case paru
+                    paru -Ss $argv
+                case yay
+                    yay -Ss $argv
+                case shelly
+                    shelly search $argv
+                case '*'
+                    pacman -Ss $argv
+            end
+            return
+        end
+
+        # 构建 fzf 选项与搜索预填
+        set -l fzf_query ""
+        if test (count $argv) -gt 0
+            set fzf_query "$argv"
+        end
+
+        set -l preview_cmd "pacman -Si {2}"
+        if test "$helper" = "paru"
+            set preview_cmd "paru -Si {2} 2>/dev/null || pacman -Si {2}"
+        else if test "$helper" = "yay"
+            set preview_cmd "yay -Si {2} 2>/dev/null || pacman -Si {2}"
+        end
+
+        set -l header_str "aur <kw> → AUR | pac <kw> → repo | [Tab] multi-select"
+
+        set -l pkgs (_nyxdeck_se_search "$fzf_query" "$helper" | fzf --multi --prompt='search > ' \
+            --header="$header_str" \
+            --query="$fzf_query" \
+            --bind 'change:reload(fish -c "_nyxdeck_se_search {q} '$helper'")' \
+            --preview "$preview_cmd" --preview-window 'right:60%:wrap')
+
+        if test -n "$pkgs"
+            set -l clean_pkgs
+            for p in $pkgs
+                set -a clean_pkgs (string replace -r '^\[.*?\]\s+' '' -- $p)
+            end
+            if test -n "$clean_pkgs"
+                in $clean_pkgs
+            end
+        end
+    end
+
+    # un：模糊搜索已安装的包并用 fzf 交互卸载 (无 fzf 时自动降级)
+    function un --description "Fuzzy search & remove installed packages"
+        set -l helper (_nyxdeck_pkg_helper)
+
+        if not command -v fzf &>/dev/null
+            set_color yellow; echo "[!] fzf not found, falling back to installed list"; set_color normal
+            pacman -Qs $argv
+            return
+        end
+
+        set -l fzf_query ""
+        if test (count $argv) -gt 0
+            set fzf_query "$argv"
+        end
+
+        set -l pkgs (pacman -Qq | fzf --multi --prompt='remove > ' \
+            --header='[Tab] multi-select | [Enter] remove | [Esc] cancel' \
+            --query="$fzf_query" \
+            --preview 'pacman -Qi {1}' --preview-window 'right:60%:wrap')
+
+        if test -n "$pkgs"
+            switch "$helper"
+                case paru
+                    paru -Rns $pkgs
+                case yay
+                    yay -Rns $pkgs
+                case shelly
+                    shelly remove standard $pkgs
+                case '*'
+                    sudo pacman -Rns $pkgs
+            end
+        end
+    end
+    
+    if command -v eza &>/dev/null
+        if test "$TERM" != "linux"
+            alias ls 'eza --icons=auto'
+        else
+            alias ls 'eza'
+        end
+    end
+end

@@ -14,7 +14,7 @@ BACKUP_ROOT="$CONFIG_HOME/.nyxdeck-backup"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 # configs/<subdir> is deployed onto ~/.config/<subdir>.
-APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct" "fastfetch" "fish")
+APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct" "fastfetch" "fish" "nyxdeck")
 # configs/<file> is deployed onto ~/.config/<file>.
 FILES=("starship.toml")
 # Machine/user state: create if missing, but never overwrite an existing file.
@@ -25,6 +25,12 @@ PRESERVE=(
     "niri/__custom__.kdl"
     "niri/orbit-items__custom__.toml"
     "niri/effects.kdl"
+    # The user's own shell additions live here; the rest of config.fish is ours
+    # and does get refreshed.
+    "fish/conf.d/__custom__.fish"
+    # fisher's state: which plugins are wanted, and fish's universal variables.
+    "fish/fish_plugins"
+    "fish/fish_variables"
 )
 
 say()  { printf '%s\n' "$*"; }
@@ -175,6 +181,33 @@ do_deploy() {
     while IFS= read -r -d '' s; do
         chmod +x "$s"
     done < <(find "$CONFIG_HOME/niri/scripts" "$CONFIG_HOME/DankMaterialShell" "$CONFIG_HOME/matugen" -name '*.sh' -print0 2>/dev/null)
+    # clean-cache.py is executed directly by the `clean` alias.
+    [ -f "$CONFIG_HOME/fish/clean-cache.py" ] && chmod +x "$CONFIG_HOME/fish/clean-cache.py"
+
+    # Non-fish shells: source our hook from their rc files. Appended once,
+    # marked, and only when the file exists, so a bash/zsh login gets the same
+    # PATH, prompt and welcome panel as fish.
+    local rc
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        [ -f "$rc" ] || continue
+        grep -q "nyxdeck/nyxdeck.sh" "$rc" 2>/dev/null && continue
+        mkdir -p "$BACKUP_ROOT/$STAMP/$(dirname "${rc#"$HOME/"}")"
+        cp -p "$rc" "$BACKUP_ROOT/$STAMP/${rc#"$HOME/"}" 2>/dev/null || true
+        {
+            printf '\n# NyxDeck shell layer (PATH, prompt, welcome panel)\n'
+            printf '[ -f "$HOME/.config/nyxdeck/nyxdeck.sh" ] && . "$HOME/.config/nyxdeck/nyxdeck.sh"\n'
+        } >> "$rc"
+        say "  + $rc (NyxDeck hook)"
+    done
+
+    # One-off: a stale hook from an earlier setup.
+    local stale="$CONFIG_HOME/fish/conf.d/nyxdeck-path.fish"
+    if [ -e "$stale" ]; then
+        mkdir -p "$BACKUP_ROOT/$STAMP/fish/conf.d"
+        cp -p "$stale" "$BACKUP_ROOT/$STAMP/fish/conf.d/" 2>/dev/null || true
+        rm -f "$stale"
+        say "  - $stale (legacy leftover, replaced by nyxdeck-path.fish)"
+    fi
 
     msg "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/" "Done. Previous files backed up to $BACKUP_ROOT/$STAMP/"
 }

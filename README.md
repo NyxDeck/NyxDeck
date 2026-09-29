@@ -91,6 +91,10 @@ nyxdeck plugin install <id> [--force]
 nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck shell doctor           # shell layer: what is deployed, what is left over
+nyxdeck shell edit             # open the preserved __custom__.fish
+nyxdeck clean                  # cache cleaner (the `clean` alias runs the same)
+nyxdeck help                   # cheatsheet: commands, keybindings, shell helpers
 nyxdeck logo pick              # one screen: choices, live preview, type to filter
 nyxdeck logo [show]            # the panel mark: show | list [filter] | preview [name]
 nyxdeck logo set arch_small    # a built-in fastfetch logo, or a path to an ASCII file
@@ -206,6 +210,34 @@ own configuration is about to initialise starship; it defers to the first
 `fish_prompt` event and checks `STARSHIP_SHELL` there, which means it initialises
 starship on a box that has none and does nothing on a box that already does
 (initialising twice would duplicate key bindings).
+
+### Shell layer
+
+NyxDeck owns the shell configuration:
+
+| file | note |
+|---|---|
+| `configs/fish/config.fish` | aliases, proxy helpers, package helpers — **refreshed on deploy** |
+| `configs/fish/clean-cache.py` | the cache cleaner behind `nyxdeck clean` and the `clean` alias |
+| `configs/fish/conf.d/__custom__.fish` | the entry point for private tweaks — **preserved on deploy** |
+| `configs/fish/conf.d/nyxdeck-*.fish` | PATH, welcome panel, prompt hooks |
+| `configs/nyxdeck/nyxdeck.sh` | the same PATH, prompt and panel for bash and zsh, sourced from their rc files |
+| `configs/starship.toml` | the prompt layout (merged at deploy time, see below) |
+
+Anything personal belongs in `conf.d/__custom__.fish` or a `__custom__/` directory
+next to it; `config.fish` itself is refreshed so the shell layer can actually
+evolve. Fisher plugins stay user-managed and are never touched.
+
+`nyxdeck shell status` reports each file, `nyxdeck shell doctor` also flags
+`nyxdeck shell doctor` also checks what the layer needs (starship, the hooks,
+the fisher plugins), `shell install` re-deploys and `shell edit` opens the private file.
+
+`nyxdeck help` is generated rather than hand-written: the command list comes
+from the argument parser and the keybindings are parsed from the niri
+configuration in use, so the cheatsheet cannot go stale. The `nyxhelp` and
+`clean` aliases still work.
+
+### Prompt styles
 
 ### Mihomo TUN pipeline
 
