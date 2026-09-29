@@ -34,6 +34,7 @@ CORE_DEPS = ["cava", "matugen", "qt6ct", "wtype"]
 # `dms plugins install` (the registry).
 PLUGIN_REPOS = {
     "nyxRings": "https://github.com/NyxDeck/nyxRings.git",
+    "mihomoTun": "https://github.com/NyxDeck/mihomo-tun.git",
 }
 
 VISUALIZER_PLUGIN = "nyxRings"
@@ -307,6 +308,21 @@ def cmd_doctor(_: list[str]) -> int:
     else:
         warn(t("未找到 niri 配置", "niri config not found"))
 
+    say("\n" + t("Mihomo TUN", "Mihomo TUN"))
+    if have("mihomo"):
+        ok(t("mihomo 已安装", "mihomo installed"))
+    else:
+        warn(t("mihomo 未安装", "mihomo not installed"))
+    if _service_state() == "active":
+        ok(t(f"{MIHOMO_UNIT} 运行中", f"{MIHOMO_UNIT} active"))
+    else:
+        warn(t(f"{MIHOMO_UNIT} 未运行", f"{MIHOMO_UNIT} not active"))
+    if _dashboard_ok():
+        ok(t("本地面板可用", "local dashboard ready"))
+    else:
+        warn(t("本地面板未就绪（nyxdeck mihomo dashboard）",
+               "local dashboard not ready (nyxdeck mihomo dashboard)"))
+
     say("\n" + t("插件", "Plugins"))
     for plugin in PLUGIN_REPOS:
         if (PLUGIN_DIR / plugin).is_dir():
@@ -463,6 +479,256 @@ def cmd_lang(argv: list[str]) -> int:
     return 0
 
 
+# ── Mihomo TUN pipeline ─────────────────────────────────────────────────────
+# nyxdeck owns the whole chain: the mihomo core, its /etc/mihomo configuration,
+# the local dashboard served at /ui/, and the DMS plugin that draws the panel.
+# The root-side work lives in the plugin checkout (install.sh,
+# scripts/install-dashboard.sh); this module orchestrates it.
+
+MIHOMO_PLUGIN = "mihomoTun"
+MIHOMO_UNIT = "mihomo.service"
+MIHOMO_CONTROLLER = "127.0.0.1:9090"
+MIHOMO_CONFIG = Path("/etc/mihomo/config.yaml")
+MIHOMO_UI = Path("/etc/mihomo/ui")
+MIHOMO_SECRET = Path("/etc/mihomo/.controller-secret")
+
+
+def mihomo_dir() -> Path:
+    return PLUGIN_DIR / MIHOMO_PLUGIN
+
+
+def _capture(args: list[str]) -> str:
+    try:
+        res = subprocess.run(args, capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    return res.stdout.strip()
+
+
+def _service_state() -> str:
+    return _capture(["systemctl", "is-active", MIHOMO_UNIT]) or "unknown"
+
+
+def _service_enabled() -> bool:
+    return _capture(["systemctl", "is-enabled", MIHOMO_UNIT]) == "enabled"
+
+
+def _http_code(url: str) -> str:
+    if not have("curl"):
+        return ""
+    return _capture(["curl", "-s", "-o", "/dev/null", "-m", "3", "-w", "%{http_code}", url])
+
+
+def _secret_value() -> str:
+    try:
+        return MIHOMO_SECRET.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _controller_ok() -> bool:
+    # The controller authenticates every API call, including /version.
+    return _http_code_with_secret(f"http://{MIHOMO_CONTROLLER}/version") == "200"
+
+
+def _http_code_with_secret(url: str) -> str:
+    if not have("curl"):
+        return ""
+    return _capture(["curl", "-s", "-o", "/dev/null", "-m", "3", "-w", "%{http_code}",
+                     "-H", f"Authorization: Bearer {_secret_value()}", url])
+
+
+def _dashboard_ok() -> bool:
+    return _http_code(f"http://{MIHOMO_CONTROLLER}/ui/") == "200"
+
+
+def _plugin_loaded() -> bool:
+    out = _capture(["dms", "ipc", "call", "plugins", "list"])
+    return f"{MIHOMO_PLUGIN} [loaded]" in out or f"{MIHOMO_PLUGIN} [enabled]" in out
+
+
+def _enable_mihomo_plugin() -> None:
+    if not have("dms"):
+        return
+    dms("ipc", "call", "plugins", "enable", MIHOMO_PLUGIN)
+    dms_restart()
+
+
+def _run_root(relative: str, extra: list[str]) -> int:
+    script = mihomo_dir() / relative
+    if not script.is_file():
+        err(t(f"找不到 {script}；先装插件：nyxdeck mihomo plugin",
+              f"{script} not found; install the plugin first: nyxdeck mihomo plugin"))
+        return 1
+    say(t(f"需要 root，可能会提示输入密码", "root is required; sudo may ask for your password"))
+    return subprocess.run(["sudo", str(script), *extra]).returncode
+
+
+def _confirm(question: str) -> bool:
+    if not sys.stdin.isatty():
+        return True
+    try:
+        return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def cmd_mihomo(argv: list[str]) -> int:
+    action = argv[0] if argv else "status"
+    rest = argv[1:]
+
+    if action == "status":
+        say(t("Mihomo TUN 链路", "Mihomo TUN pipeline"))
+
+        say("\n" + t("内核", "Core"))
+        if have("mihomo"):
+            ok(t("mihomo 已安装", "mihomo installed") + f"  ({shutil.which('mihomo')})")
+        else:
+            warn(t("mihomo 未安装（nyxdeck mihomo install）", "mihomo not installed (nyxdeck mihomo install)"))
+
+        say("\n" + t("服务", "Service"))
+        state = _service_state()
+        if state == "active":
+            ok(f"{MIHOMO_UNIT}: {state}")
+        else:
+            warn(f"{MIHOMO_UNIT}: {state}")
+        if _service_enabled():
+            ok(t("已开机自启", "enabled at boot"))
+        else:
+            warn(t("未开机自启", "not enabled at boot"))
+
+        say("\n" + t("配置", "Configuration"))
+        if MIHOMO_CONFIG.is_file():
+            ok(str(MIHOMO_CONFIG))
+        else:
+            warn(t(f"{MIHOMO_CONFIG} 不存在", f"{MIHOMO_CONFIG} missing"))
+        if MIHOMO_SECRET.is_file():
+            ok(str(MIHOMO_SECRET))
+        else:
+            warn(t(f"{MIHOMO_SECRET} 不存在", f"{MIHOMO_SECRET} missing"))
+        if _controller_ok():
+            ok(t("控制器可访问", "controller reachable") + f"  ({MIHOMO_CONTROLLER})")
+        else:
+            warn(t("控制器无响应", "controller not responding") + f"  ({MIHOMO_CONTROLLER})")
+
+        say("\n" + t("控制面板与 DMS 插件", "Dashboard and DMS plugin"))
+        url = f"http://{MIHOMO_CONTROLLER}/ui/"
+        if _dashboard_ok():
+            ok(t("本地面板可用", "local dashboard ready") + f"  {url}")
+        else:
+            warn(t("本地面板未就绪", "local dashboard not ready")
+                 + t(f"  （nyxdeck mihomo dashboard）", "  (nyxdeck mihomo dashboard)"))
+        if mihomo_dir().is_dir():
+            ok(t("插件已安装", "plugin installed") + f"  ({mihomo_dir()})")
+            if _plugin_loaded():
+                ok(t("插件已加载", "plugin loaded"))
+            else:
+                warn(t("插件未加载", "plugin not loaded"))
+        else:
+            warn(t("插件未安装（nyxdeck mihomo install）", "plugin not installed (nyxdeck mihomo install)"))
+        return 0
+
+    if action in ("install", "repair"):
+        say(t("安装 Mihomo TUN 全链路：内核 → 配置 → 面板 → 服务 → DMS 插件",
+              "Installing the whole Mihomo TUN pipeline: core → config → dashboard → service → DMS plugin"))
+        rc = _install_repo_plugin(MIHOMO_PLUGIN, PLUGIN_REPOS[MIHOMO_PLUGIN])
+        if rc != 0:
+            return rc
+        extra = ["--yes"]
+        for flag in ("--force", "--no-dashboard", "--no-start"):
+            if flag in rest:
+                extra.append(flag)
+        rc = _run_root("install.sh", extra)
+        if rc != 0:
+            err(t("mihomo 安装未完成", "mihomo install did not finish"))
+            return rc
+        _enable_mihomo_plugin()
+        ok(t("链路就绪：顶栏盾牌打开可视化面板，Web 面板打开本地面板",
+             "Pipeline ready: the shield pill opens the panel, Web panel opens the dashboard"))
+        return 0
+
+    if action == "dashboard":
+        say(t("安装 / 更新本地控制面板", "Install / update the local dashboard"))
+        extra = [flag for flag in ("--force",) if flag in rest]
+        if "--url" in rest:
+            extra += ["--url", rest[rest.index("--url") + 1]]
+        return _run_root("scripts/install-dashboard.sh", extra)
+
+    if action == "plugin":
+        rc = _install_repo_plugin(MIHOMO_PLUGIN, PLUGIN_REPOS[MIHOMO_PLUGIN])
+        if rc == 0:
+            _enable_mihomo_plugin()
+            ok(t("DMS 插件就绪", "DMS plugin ready"))
+        return rc
+
+    if action == "secret":
+        if not MIHOMO_SECRET.is_file():
+            err(t(f"{MIHOMO_SECRET} 不存在", f"{MIHOMO_SECRET} missing"))
+            return 1
+        value = MIHOMO_SECRET.read_text().strip()
+        say(value)
+        if have("wl-copy"):
+            subprocess.run(["wl-copy"], input=value, text=True, check=False)
+            ok(t("已复制到剪贴板", "copied to the clipboard"))
+        return 0
+
+    if action in ("on", "off"):
+        verb = "start" if action == "on" else "stop"
+        return subprocess.run(["sudo", "systemctl", verb, MIHOMO_UNIT]).returncode
+
+    if action == "uninstall":
+        purge = "--purge" in rest
+        assume_yes = "--yes" in rest
+        if mihomo_dir().is_dir():
+            if assume_yes or _confirm(t(f"删除 DMS 插件 {mihomo_dir()}？", f"Remove the DMS plugin at {mihomo_dir()}?")):
+                shutil.rmtree(mihomo_dir())
+                ok(t(f"已删除 {mihomo_dir()}", f"removed {mihomo_dir()}"))
+                dms_restart()
+        else:
+            warn(t("插件未安装", "plugin not installed"))
+        if purge:
+            if assume_yes or _confirm(t("同时移除本地面板、停止并禁用 mihomo 服务？",
+                                        "Also remove the dashboard and stop/disable the mihomo service?")):
+                subprocess.run(["sudo", "systemctl", "disable", "--now", MIHOMO_UNIT], check=False)
+                subprocess.run(["sudo", "rm", "-rf", str(MIHOMO_UI)], check=False)
+                ok(t("已移除本地面板并停止服务（/etc/mihomo 配置保留）",
+                     "dashboard removed and service stopped (/etc/mihomo kept)"))
+        return 0
+
+    err(t(f"未知的 mihomo 操作: {action}",
+          f"unknown mihomo action: {action}"))
+    say(t("用法: nyxdeck mihomo [status|install|dashboard|plugin|secret|on|off|uninstall]",
+          "usage: nyxdeck mihomo [status|install|dashboard|plugin|secret|on|off|uninstall]"))
+    return 2
+
+
+def mihomo_menu() -> None:
+    while True:
+        items = [
+            t("状态", "Status"),
+            t("安装 / 修复全链路", "Install / repair the pipeline"),
+            t("安装 / 更新本地面板", "Install / update the local dashboard"),
+            t("安装 / 更新 DMS 插件", "Install / update the DMS plugin"),
+            t("显示控制器密钥", "Show the controller secret"),
+            t("返回", "Back"),
+        ]
+        choice = _menu("Mihomo TUN", items)
+        if choice is None or choice == 5:
+            return
+        clear_screen()
+        if choice == 0:
+            cmd_mihomo(["status"])
+        elif choice == 1:
+            cmd_mihomo(["install"])
+        elif choice == 2:
+            cmd_mihomo(["dashboard"])
+        elif choice == 3:
+            cmd_mihomo(["plugin"])
+        elif choice == 4:
+            cmd_mihomo(["secret"])
+        _press_any_key()
+
+
 # ── Interactive control panel ────────────────────────────────────────────────
 
 def main_menu() -> int:
@@ -472,13 +738,14 @@ def main_menu() -> int:
             t("部署配置", "Deploy configuration"),
             t("体检", "Doctor"),
             t("安装核心软件包", "Install core packages"),
+            t("Mihomo TUN", "Mihomo TUN"),
             vis,
             t("插件", "Plugins"),
             t("语言 / Language", "Language"),
             t("退出", "Exit"),
         ]
         choice = _menu(t("控制面板", "Control panel"), items)
-        if choice is None or choice == 6:
+        if choice is None or choice == 7:
             return 0
         clear_screen()
         if choice == 0:
@@ -488,10 +755,13 @@ def main_menu() -> int:
         elif choice == 2:
             cmd_deps([])
         elif choice == 3:
-            cmd_visualizer(["off"] if visualizer_enabled() else ["on"])
+            mihomo_menu()
+            continue
         elif choice == 4:
-            cmd_plugin(["list"])
+            cmd_visualizer(["off"] if visualizer_enabled() else ["on"])
         elif choice == 5:
+            cmd_plugin(["list"])
+        elif choice == 6:
             select_language()
             continue
         _press_any_key()
@@ -512,6 +782,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  "install the core packages (pacman); --check lists what is missing"))
     sub.add_parser("plugin", help=t("管理 DMS 插件：list | install <id> | update [id]",
                                     "manage DMS plugins: list | install <id> | update [id]"))
+    sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
+                                    "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
     sub.add_parser("visualizer", help=t("NyxRings 桌面组件：on | off | status",
                                         "NyxRings desktop widget: on | off | status"))
     sub.add_parser("widget", help=t("桌面组件：list", "desktop widgets: list"))
@@ -542,6 +814,8 @@ def main(argv: list[str]) -> int:
         return cmd_deps(rest)
     if command == "plugin":
         return cmd_plugin(rest)
+    if command == "mihomo":
+        return cmd_mihomo(rest)
     if command == "visualizer":
         return cmd_visualizer(rest)
     if command == "widget":

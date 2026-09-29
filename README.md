@@ -87,15 +87,39 @@ nyxdeck doctor           # check dependencies, the session, and plugins
 nyxdeck deps [--check]   # install the core packages (cava, matugen, qt6ct, wtype)
 nyxdeck widget list      # desktop widgets
 nyxdeck plugin list
-nyxdeck plugin install <id>    # e.g. nyxRings, cavaVisualizer, enderPulse
+nyxdeck plugin install <id>    # e.g. nyxRings, mihomoTun, cavaVisualizer, enderPulse
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck mihomo status          # core, service, controller, dashboard, plugin
+nyxdeck mihomo install         # whole chain: core → config → dashboard → unit → plugin
+nyxdeck mihomo dashboard       # install / update the local dashboard at /ui/
+nyxdeck mihomo plugin          # install / update the DMS plugin only
+nyxdeck mihomo secret          # show the controller secret (and copy it)
+nyxdeck mihomo on|off          # start / stop mihomo.service
+nyxdeck mihomo uninstall [--purge]
 ```
 
 `install`, `status`, and `uninstall` are `install.sh`. The rest wrap DMS: the
 plugin manager, and the desktop-widget instances stored in
 `~/.config/DankMaterialShell/settings.json`. `nyxdeck visualizer on` installs
 the NyxRings plugin from its repository if needed, then adds a widget instance.
+
+### Mihomo TUN pipeline
+
+`nyxdeck mihomo install` owns the whole chain and is idempotent:
+
+1. the `mihomo` core (pacman / AUR),
+2. `/etc/mihomo/config.yaml` + controller secret + the DIRECT rule provider,
+3. **metacubexd** into `/etc/mihomo/ui` plus `external-ui` in the config, so the
+   controller serves a local dashboard at `http://127.0.0.1:9090/ui/`,
+4. `mihomo.service`, enabled and started,
+5. the `mihomoTun` DMS plugin, enabled and restarted.
+
+The root-side steps live in the plugin checkout (`install.sh`,
+`scripts/install-dashboard.sh`) and are invoked through `sudo`; the GUI panel
+uses `pkexec` for the same edits. Mihomo only exposes `/ui/` when `external-ui`
+is configured, so the plugin's *Web panel* button probes the endpoint first and
+falls back to the hosted dashboard with the secret on the clipboard.
 
 Output is bilingual (zh / en), chosen from the locale (`LC_ALL`,
 `LC_MESSAGES`, `LANG`); set `NYXDECK_LANG=zh` or `en` to override. `install.sh`
