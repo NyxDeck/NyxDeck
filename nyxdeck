@@ -93,17 +93,46 @@ def t(zh: str, en: str) -> str:
 R = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-BLUE = "\033[34m"
-PURPLE = "\033[35m"
-CYAN = "\033[36m"
-GRAY = "\033[90m"
-B_MAGENTA = "\033[1;35m"
-B_CYAN = "\033[1;36m"
-B_GREEN = "\033[1;32m"
-B_WHITE = "\033[1;37m"
+
+
+def _load_palette() -> dict:
+    """DMS's generated Material You palette, refreshed on every theme change."""
+    if os.environ.get("NO_COLOR"):
+        return {}
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    try:
+        data = json.loads((cache / "DankMaterialShell" / "dms-colors.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data.get("colors", {}).get(data.get("mode", "dark")) or {}
+
+
+def _truecolor(value: str) -> str:
+    hex_value = str(value or "").lstrip("#")
+    if len(hex_value) != 6:
+        return ""
+    try:
+        channels = tuple(int(hex_value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return ""
+    return "\033[38;2;%d;%d;%dm" % channels
+
+
+PALETTE = _load_palette()
+
+
+def _role(name: str, fallback: str) -> str:
+    return _truecolor(PALETTE.get(name, "")) or fallback
+
+
+# The CLI follows the desktop instead of a fixed ANSI green, so it agrees with
+# the bar, the terminal and the wallpaper. Each slot keeps an ANSI fallback for
+# the case where the palette cache does not exist yet.
+ACCENT = _role("primary", "\033[36m")             # banner, titles, selection, success
+WARN_COLOR = _role("tertiary", "\033[33m")        # warnings
+ERR_COLOR = _role("error", "\033[31m")            # failures
+TEXT = _role("on_surface", "\033[37m")            # plain emphasis
+MUTED = _role("on_surface_variant", "\033[90m")   # secondary text, hints, idle items
 
 
 def clear_screen() -> None:
@@ -116,15 +145,15 @@ def say(text: str = "") -> None:
 
 
 def ok(text: str) -> None:
-    print(f"{GREEN}✓{R} {text}")
+    print(f"{ACCENT}✓{R} {text}")
 
 
 def warn(text: str) -> None:
-    print(f"{YELLOW}!{R} {text}")
+    print(f"{WARN_COLOR}!{R} {text}")
 
 
 def err(text: str) -> None:
-    print(f"{RED}✗{R} {text}")
+    print(f"{ERR_COLOR}✗{R} {text}")
 
 
 def have(cmd: str) -> bool:
@@ -147,15 +176,15 @@ def show_logo() -> None:
     subtitle = t("DankMaterialShell 桌面环境部署", "DankMaterialShell Desktop Environment Setup")
     mode_line = f"Mode: Local Path ({REPO})"
     if cols < 66:
-        print(f"\n{B_MAGENTA}  NYX DECK{R}  {B_WHITE}{VERSION}{R}")
-        print(f"  {GRAY}{mode_line}{R}\n")
+        print(f"\n{ACCENT}{BOLD}  NYX DECK{R}  {TEXT}{VERSION}{R}")
+        print(f"  {MUTED}{mode_line}{R}\n")
         return
     print()
     for line in BANNER.split("\n"):
-        print(f"{B_MAGENTA}{line}{R}")
+        print(f"{ACCENT}{line}{R}")
     print()
-    print(f"  {B_CYAN}{subtitle}{R} {GRAY}|{R} {B_WHITE}{VERSION}{R}")
-    print(f"  {GRAY}{mode_line}{R}\n")
+    print(f"  {ACCENT}{subtitle}{R} {MUTED}|{R} {TEXT}{VERSION}{R}")
+    print(f"  {MUTED}{mode_line}{R}\n")
 
 
 def _read_key() -> str:
@@ -189,7 +218,7 @@ def _read_key() -> str:
 
 
 def _press_any_key() -> None:
-    print(f"\n  {GRAY}{t('[任意键返回]', '[press any key]')}{R}", end="", flush=True)
+    print(f"\n  {MUTED}{t('[任意键返回]', '[press any key]')}{R}", end="", flush=True)
     _read_key()
 
 
@@ -198,15 +227,15 @@ def _menu(title: str, items: list[str], footer: str = "") -> int | None:
     while True:
         clear_screen()
         show_logo()
-        print(f"  {B_CYAN}── {title} ──{R}\n")
+        print(f"  {ACCENT}── {title} ──{R}\n")
         for i, label in enumerate(items):
             if i == focus:
-                print(f"  {B_GREEN}❯ {label}{R}")
+                print(f"  {ACCENT}{BOLD}❯ {label}{R}")
             else:
-                print(f"    {DIM}{label}{R}")
+                print(f"    {MUTED}{label}{R}")
         hint = footer or t("[↑/↓] 移动   [Enter] 选择   [Esc] 返回",
                            "[↑/↓] Move   [Enter] Select   [Esc] Back")
-        print(f"\n  {GRAY}{hint}{R}")
+        print(f"\n  {MUTED}{hint}{R}")
         key = _read_key()
         if key == "up":
             focus = (focus - 1) % len(items)
@@ -223,13 +252,13 @@ def select_language() -> None:
     while True:
         clear_screen()
         show_logo()
-        print(f"  {B_CYAN}── 请选择语言 / Select Language ──{R}\n")
+        print(f"  {ACCENT}── 请选择语言 / Select Language ──{R}\n")
         focus = 0 if LANG == "en" else 1
         for i, label in enumerate(items):
             mark = "❯" if i == focus else " "
-            style = B_GREEN if i == focus else DIM
+            style = ACCENT + BOLD if i == focus else MUTED
             print(f" {style}{mark} {label}{R}")
-        print(f"\n  {GRAY}[↑/↓] Move   [Enter] Select{R}")
+        print(f"\n  {MUTED}[↑/↓] Move   [Enter] Select{R}")
         key = _read_key()
         if key == "up":
             focus = (focus - 1) % len(items)
