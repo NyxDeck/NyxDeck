@@ -10,15 +10,42 @@ import subprocess
 import time
 
 
-def _clear_mpvpaper():
-    """Cleanly terminate running mpvpaper instances and wait for process exit."""
+# What DMS is showing for the running video (a still frame, since the palette
+# cannot come from a video). The matugen hook reads this to tell a wallpaper we
+# set from one DMS' own picker or cycler set.
+LIVE_FRAME_STATE = os.path.expanduser("~/.cache/nyxdeck/live-wallpaper-frame")
+
+
+def _remember_live_frame(thumb_path: str):
+    """Record the frame DMS is showing, or forget it when a still is applied."""
     try:
-        subprocess.run(["pkill", "-x", "mpvpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        os.makedirs(os.path.dirname(LIVE_FRAME_STATE), exist_ok=True)
+        if thumb_path:
+            with open(LIVE_FRAME_STATE, "w", encoding="utf-8") as handle:
+                handle.write(thumb_path)
+        elif os.path.exists(LIVE_FRAME_STATE):
+            os.remove(LIVE_FRAME_STATE)
+    except OSError:
+        pass
+
+
+def _clear_mpvpaper():
+    """Terminate every mpvpaper instance and wait for it to actually be gone.
+
+    A 4K video with hardware decoding takes longer to tear down than a short
+    sleep allows, and a process still holding the layer when the next one starts
+    leaves two of them drawing over each other.
+    """
+    try:
         for _ in range(10):
             res = subprocess.run(["pgrep", "-x", "mpvpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             if res.returncode != 0:
-                break
-            time.sleep(0.05)
+                return
+            subprocess.run(["pkill", "-x", "mpvpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            time.sleep(0.2)
+        # Still there after two seconds: take it down.
+        subprocess.run(["pkill", "-9", "-x", "mpvpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        time.sleep(0.2)
     except Exception:
         pass
 
@@ -38,6 +65,7 @@ def apply_static_wallpaper(path: str) -> bool:
     """Apply a static wallpaper, dropping any live video layer first."""
     try:
         _clear_mpvpaper()
+        _remember_live_frame("")
         _set_dms_wallpaper(path)
         return True
     except Exception as e:
@@ -53,6 +81,7 @@ def apply_dynamic_wallpaper(video_path: str, thumb_path: str = None) -> bool:
         # A video frame cannot be color-extracted directly; feed DMS the
         # thumbnail so the Material You theme still tracks the wallpaper.
         if thumb_path and os.path.isfile(thumb_path):
+            _remember_live_frame(thumb_path)
             _set_dms_wallpaper(thumb_path)
 
         mpv_opts = "config=no load-scripts=no loop-file=inf panscan=1.0 no-audio hwdec=auto"
