@@ -17,7 +17,7 @@ BACKUP_KEEP=10
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 # configs/<subdir> is deployed onto ~/.config/<subdir>.
-APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct" "fastfetch" "fish" "nyxdeck")
+APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct" "fcitx5" "fastfetch" "fish" "nyxdeck")
 # configs/<file> is deployed onto ~/.config/<file>.
 FILES=("starship.toml")
 # Machine/user state: create if missing, but never overwrite an existing file.
