@@ -1238,6 +1238,13 @@ def _install_repo_plugin(plugin: str, url: str, force: bool = False) -> int:
     if rc != 0:
         err(t(f"{plugin} 克隆失败", f"failed to clone {plugin}"))
         return rc
+    # Plugins from the registry are installed by DMS itself; ours come from the
+    # table above. Anything else is delegated rather than reimplemented.
+    if plugin not in PLUGIN_REPOS and have("dms"):
+        say(t(f"{plugin} 不在我们的仓库表里，交给 DMS 从插件市场安装",
+              f"{plugin} is not one of ours; letting DMS install it from the registry"))
+        return subprocess.run(["dms", "plugins", "install", plugin], check=False).returncode
+
     if not plugin_state(plugin)["manifest_ok"]:
         warn(t(f"{plugin} 已克隆，但 plugin.json 无效", f"{plugin} cloned but its plugin.json is invalid"))
     dms_restart()
