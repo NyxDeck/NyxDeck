@@ -1,0 +1,558 @@
+#!/usr/bin/env python3
+"""nyxdeck — command line for the NyxDeck desktop.
+
+Deploys the configuration, installs dependencies and DMS plugins (including
+NyxRings), and toggles desktop features. Bilingual (zh/en), selected from the
+locale, overridable with NYXDECK_LANG. Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import select
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(os.path.realpath(__file__)).parent
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+DMS_DIR = CONFIG_HOME / "DankMaterialShell"
+PLUGIN_DIR = DMS_DIR / "plugins"
+SETTINGS = DMS_DIR / "settings.json"
+NIRI_CONFIG = CONFIG_HOME / "niri" / "config.kdl"
+LANG_FILE = CONFIG_HOME / "nyxdeck" / "lang"
+
+VERSION = "0.1.0"
+
+# Packages NyxDeck needs at runtime.
+CORE_DEPS = ["cava", "matugen", "qt6ct", "wtype"]
+
+# Plugins installed by cloning a repository. Other ids go through
+# `dms plugins install` (the registry).
+PLUGIN_REPOS = {
+    "nyxRings": "https://github.com/NyxDeck/nyxRings.git",
+}
+
+VISUALIZER_PLUGIN = "nyxRings"
+
+BANNER = r"""
+███╗   ██╗██╗   ██╗██╗  ██╗██████╗ ███████╗ ██████╗██╗  ██╗
+████╗  ██║╚██╗ ██╔╝╚██╗██╔╝██╔══██╗██╔════╝██╔════╝██║ ██╔╝
+██╔██╗ ██║ ╚████╔╝  ╚███╔╝ ██║  ██║█████╗  ██║     █████╔╝
+██║╚██╗██║  ╚██╔╝   ██╔██╗ ██║  ██║██╔══╝  ██║     ██╔═██╗
+██║ ╚████║   ██║   ██╔╝ ██╗██████╔╝███████╗╚██████╗██║  ██╗
+╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝
+""".strip("\n")
+
+
+def _saved_lang() -> str:
+    if LANG_FILE.is_file():
+        value = LANG_FILE.read_text(encoding="utf-8").strip().lower()
+        if value.startswith("zh"):
+            return "zh"
+        if value.startswith("en"):
+            return "en"
+    return ""
+
+
+def _detect_lang() -> str:
+    saved = _saved_lang()
+    if saved:
+        return saved
+    override = os.environ.get("NYXDECK_LANG", "").strip().lower()
+    if override:
+        return "zh" if override.startswith("zh") else "en"
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").lower()
+        if value:
+            return "zh" if value.startswith("zh") else "en"
+    return "en"
+
+
+LANG = _detect_lang()
+
+
+def set_lang(lang: str) -> None:
+    global LANG
+    LANG = "zh" if lang.startswith("zh") else "en"
+    LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LANG_FILE.write_text(LANG + "\n", encoding="utf-8")
+
+
+def t(zh: str, en: str) -> str:
+    """Pick a bilingual string by the active language."""
+    return zh if LANG == "zh" else en
+
+
+# ── Colors ──────────────────────────────────────────────────────────────────
+
+R = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+PURPLE = "\033[35m"
+CYAN = "\033[36m"
+GRAY = "\033[90m"
+B_MAGENTA = "\033[1;35m"
+B_CYAN = "\033[1;36m"
+B_GREEN = "\033[1;32m"
+B_WHITE = "\033[1;37m"
+
+
+def clear_screen() -> None:
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.flush()
+
+
+def say(text: str = "") -> None:
+    print(text)
+
+
+def ok(text: str) -> None:
+    print(f"{GREEN}✓{R} {text}")
+
+
+def warn(text: str) -> None:
+    print(f"{YELLOW}!{R} {text}")
+
+
+def err(text: str) -> None:
+    print(f"{RED}✗{R} {text}")
+
+
+def have(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
+
+
+def dms(*args: str, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(["dms", *args], check=check)
+
+
+def dms_restart() -> None:
+    if have("dms"):
+        dms("restart")
+
+
+# ── Logo / TUI ──────────────────────────────────────────────────────────────
+
+def show_logo() -> None:
+    cols = shutil.get_terminal_size((80, 24)).columns
+    subtitle = t("DankMaterialShell 桌面环境部署", "DankMaterialShell Desktop Environment Setup")
+    mode_line = f"Mode: Local Path ({REPO})"
+    if cols < 66:
+        print(f"\n{B_MAGENTA}  NYX DECK{R}  {B_WHITE}{VERSION}{R}")
+        print(f"  {GRAY}{mode_line}{R}\n")
+        return
+    print()
+    for line in BANNER.split("\n"):
+        print(f"{B_MAGENTA}{line}{R}")
+    print()
+    print(f"  {B_CYAN}{subtitle}{R} {GRAY}|{R} {B_WHITE}{VERSION}{R}")
+    print(f"  {GRAY}{mode_line}{R}\n")
+
+
+def _read_key() -> str:
+    """Read one key. Reads raw bytes from the fd, not the buffered TextIOWrapper,
+    otherwise a buffered read would swallow the rest of an escape sequence and
+    select() on the fd would miss it (an arrow key would look like a bare Esc)."""
+    fd = sys.stdin.fileno()
+    import termios
+    import tty
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = os.read(fd, 1)
+        if ch == b"\x1b":
+            ready, _, _ = select.select([fd], [], [], 0.05)
+            if not ready:
+                return "esc"
+            if os.read(fd, 1) != b"[":
+                return "esc"
+            ready, _, _ = select.select([fd], [], [], 0.05)
+            if not ready:
+                return "esc"
+            return {b"A": "up", b"B": "down", b"C": "right", b"D": "left"}.get(os.read(fd, 1), "esc")
+        if ch in (b"\r", b"\n"):
+            return "enter"
+        if ch == b"\x03":
+            return "ctrl-c"
+        return ch.decode("utf-8", "ignore")
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _press_any_key() -> None:
+    print(f"\n  {GRAY}{t('[任意键返回]', '[press any key]')}{R}", end="", flush=True)
+    _read_key()
+
+
+def _menu(title: str, items: list[str], footer: str = "") -> int | None:
+    focus = 0
+    while True:
+        clear_screen()
+        show_logo()
+        print(f"  {B_CYAN}── {title} ──{R}\n")
+        for i, label in enumerate(items):
+            if i == focus:
+                print(f"  {B_GREEN}❯ {label}{R}")
+            else:
+                print(f"    {DIM}{label}{R}")
+        hint = footer or t("[↑/↓] 移动   [Enter] 选择   [Esc] 返回",
+                           "[↑/↓] Move   [Enter] Select   [Esc] Back")
+        print(f"\n  {GRAY}{hint}{R}")
+        key = _read_key()
+        if key == "up":
+            focus = (focus - 1) % len(items)
+        elif key == "down":
+            focus = (focus + 1) % len(items)
+        elif key == "enter":
+            return focus
+        elif key in ("esc", "ctrl-c", "q"):
+            return None
+
+
+def select_language() -> None:
+    items = ["English", "简体中文 (Simplified Chinese)"]
+    while True:
+        clear_screen()
+        show_logo()
+        print(f"  {B_CYAN}── 请选择语言 / Select Language ──{R}\n")
+        focus = 0 if LANG == "en" else 1
+        for i, label in enumerate(items):
+            mark = "❯" if i == focus else " "
+            style = B_GREEN if i == focus else DIM
+            print(f" {style}{mark} {label}{R}")
+        print(f"\n  {GRAY}[↑/↓] Move   [Enter] Select{R}")
+        key = _read_key()
+        if key == "up":
+            focus = (focus - 1) % len(items)
+        elif key == "down":
+            focus = (focus + 1) % len(items)
+        elif key == "enter":
+            set_lang("en" if focus == 0 else "zh")
+            return
+        elif key in ("esc", "ctrl-c", "q"):
+            return
+
+
+# ── DMS settings (desktop widgets live in settings.json) ─────────────────────
+
+def load_settings() -> dict:
+    if not SETTINGS.is_file():
+        return {}
+    try:
+        return json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(data: dict) -> None:
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def widget_instances(data: dict) -> list:
+    return data.setdefault("desktopWidgetInstances", [])
+
+
+def visualizer_enabled() -> bool:
+    return any(i.get("widgetType") == VISUALIZER_PLUGIN for i in widget_instances(load_settings()))
+
+
+# ── Commands ────────────────────────────────────────────────────────────────
+
+def cmd_deploy(argv: list[str]) -> int:
+    script = REPO / "install.sh"
+    if not script.is_file():
+        err(t(f"{REPO} 里找不到 install.sh", f"install.sh not found in {REPO}"))
+        return 1
+    return subprocess.run([str(script), *argv]).returncode
+
+
+def cmd_doctor(_: list[str]) -> int:
+    say(t("NyxDeck 体检", "NyxDeck doctor"))
+
+    say("\n" + t("依赖", "Dependencies"))
+    for pkg in CORE_DEPS:
+        if have(pkg):
+            ok(pkg)
+        else:
+            err(f"{pkg}  ({t('运行 nyxdeck deps', 'run nyxdeck deps')})")
+
+    say("\n" + t("桌面会话", "Desktop"))
+    if have("dms"):
+        res = subprocess.run(["dms", "ipc", "call", "theme", "getMode"],
+                             capture_output=True, check=False)
+        if res.returncode == 0:
+            ok(t("DankMaterialShell 运行中", "dankmaterialshell running"))
+        else:
+            warn(t("DankMaterialShell 无响应（会话是否在运行？）",
+                   "dankmaterialshell not responding (is the session running?)"))
+    else:
+        err(t("未找到 dms", "dms not found"))
+
+    if NIRI_CONFIG.is_file() and have("niri"):
+        res = subprocess.run(["niri", "validate", "-c", str(NIRI_CONFIG)],
+                             capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            ok(t("niri 配置有效", "niri config valid"))
+        else:
+            err(t("niri 配置无效", "niri config invalid"))
+    else:
+        warn(t("未找到 niri 配置", "niri config not found"))
+
+    say("\n" + t("插件", "Plugins"))
+    for plugin in PLUGIN_REPOS:
+        if (PLUGIN_DIR / plugin).is_dir():
+            ok(plugin)
+        else:
+            warn(t(f"{plugin} 未安装  （nyxdeck plugin install {plugin}）",
+                   f"{plugin} not installed  (nyxdeck plugin install {plugin})"))
+    return 0
+
+
+def cmd_deps(argv: list[str]) -> int:
+    check_only = "--check" in argv
+    missing = [p for p in CORE_DEPS if not have(p)]
+    if not missing:
+        say(t("核心依赖都已安装。", "All core dependencies are installed."))
+        return 0
+    if check_only:
+        warn(t("缺少：", "missing: ") + ", ".join(missing))
+        return 1
+    if not have("pacman"):
+        err(t("未找到 pacman；请手动安装：", "pacman not found; install manually: ") + " ".join(missing))
+        return 1
+    say(t("正在安装：", "Installing: ") + " ".join(missing))
+    return subprocess.run(["sudo", "pacman", "-S", "--needed", *missing]).returncode
+
+
+def _install_repo_plugin(plugin: str, url: str) -> int:
+    target = PLUGIN_DIR / plugin
+    if target.is_dir():
+        say(t(f"{plugin} 已安装（{target}）", f"{plugin} already installed ({target})"))
+        return 0
+    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+    say(t(f"正在克隆 {url}", f"Cloning {url}"))
+    rc = subprocess.run(["git", "clone", "--depth", "1", url, str(target)]).returncode
+    if rc == 0:
+        dms_restart()
+    return rc
+
+
+def cmd_plugin(argv: list[str]) -> int:
+    action = argv[0] if argv else "list"
+    rest = argv[1:]
+
+    if action == "list":
+        if have("dms"):
+            dms("plugins", "list")
+        else:
+            err(t("未找到 dms", "dms not found"))
+            return 1
+        return 0
+
+    if action == "install":
+        if not rest:
+            err(t("用法: nyxdeck plugin install <id>", "usage: nyxdeck plugin install <id>"))
+            return 2
+        plugin = rest[0]
+        if plugin in PLUGIN_REPOS:
+            return _install_repo_plugin(plugin, PLUGIN_REPOS[plugin])
+        rc = dms("plugins", "install", plugin).returncode
+        if rc == 0:
+            dms("ipc", "call", "plugins", "enable", plugin)
+            dms_restart()
+        return rc
+
+    if action == "update":
+        targets = rest or [p for p in PLUGIN_REPOS if (PLUGIN_DIR / p).is_dir()]
+        rc = 0
+        for plugin in targets:
+            target = PLUGIN_DIR / plugin
+            if not target.is_dir():
+                warn(t(f"{plugin} 未安装", f"{plugin} not installed"))
+                continue
+            say(t(f"更新 {plugin}", f"Updating {plugin}"))
+            rc |= subprocess.run(["git", "-C", str(target), "pull", "--ff-only"]).returncode
+        dms_restart()
+        return rc
+
+    err(t(f"未知的 plugin 操作: {action}", f"unknown plugin action: {action}"))
+    return 2
+
+
+def cmd_visualizer(argv: list[str]) -> int:
+    action = argv[0] if argv else "status"
+    present = visualizer_enabled()
+
+    if action == "status":
+        installed = (PLUGIN_DIR / VISUALIZER_PLUGIN).is_dir()
+        say(t("插件：", "plugin:  ") + (t("已安装", "installed") if installed else t("未安装", "not installed")))
+        say(t("组件：", "widget:  ") + (t("已启用", "enabled") if present else t("已禁用", "disabled")))
+        return 0
+
+    if action == "on":
+        if not (PLUGIN_DIR / VISUALIZER_PLUGIN).is_dir():
+            say(t("先安装 NyxRings 插件。", "Installing the NyxRings plugin first."))
+            rc = _install_repo_plugin(VISUALIZER_PLUGIN, PLUGIN_REPOS[VISUALIZER_PLUGIN])
+            if rc != 0:
+                return rc
+            present = visualizer_enabled()
+        if present:
+            ok(t("可视化已启用", "visualizer already enabled"))
+            return 0
+        data = load_settings()
+        import time
+        widget_instances(data).append({
+            "id": f"dw_{int(time.time() * 1000)}_{VISUALIZER_PLUGIN}",
+            "widgetType": VISUALIZER_PLUGIN,
+            "name": "NyxRings",
+            "enabled": True,
+            "config": {},
+        })
+        save_settings(data)
+        dms_restart()
+        ok(t("可视化已启用（在 设置 → 桌面组件 里拖动/缩放）",
+             "visualizer enabled (add/resize it under Settings → Desktop Widgets)"))
+        return 0
+
+    if action == "off":
+        if not present:
+            ok(t("可视化已禁用", "visualizer already disabled"))
+            return 0
+        data = load_settings()
+        data["desktopWidgetInstances"] = [
+            i for i in widget_instances(data) if i.get("widgetType") != VISUALIZER_PLUGIN
+        ]
+        save_settings(data)
+        dms_restart()
+        ok(t("可视化已禁用", "visualizer disabled"))
+        return 0
+
+    err(t(f"未知的 visualizer 操作: {action}", f"unknown visualizer action: {action}"))
+    return 2
+
+
+def cmd_widget(argv: list[str]) -> int:
+    action = argv[0] if argv else "list"
+    if action == "list":
+        if have("dms"):
+            dms("ipc", "call", "desktopWidget", "list")
+        else:
+            for i in widget_instances(load_settings()):
+                say(f"{i.get('widgetType')}  {i.get('name', '')}")
+        return 0
+    err(t(f"未知的 widget 操作: {action}", f"unknown widget action: {action}"))
+    return 2
+
+
+def cmd_lang(argv: list[str]) -> int:
+    if argv and argv[0] in ("zh", "en"):
+        set_lang(argv[0])
+        ok(t(f"语言已设为：{'中文'}", f"language set to: {argv[0]}"))
+        return 0
+    say(t(f"当前语言：{'中文' if LANG == 'zh' else 'English'}",
+          f"current language: {'Chinese' if LANG == 'zh' else 'English'}"))
+    return 0
+
+
+# ── Interactive control panel ────────────────────────────────────────────────
+
+def main_menu() -> int:
+    while True:
+        vis = t("可视化：开", "Visualizer: on") if visualizer_enabled() else t("可视化：关", "Visualizer: off")
+        items = [
+            t("部署配置", "Deploy configuration"),
+            t("体检", "Doctor"),
+            t("安装核心软件包", "Install core packages"),
+            vis,
+            t("插件", "Plugins"),
+            t("语言 / Language", "Language"),
+            t("退出", "Exit"),
+        ]
+        choice = _menu(t("控制面板", "Control panel"), items)
+        if choice is None or choice == 6:
+            return 0
+        clear_screen()
+        if choice == 0:
+            cmd_deploy(["install"])
+        elif choice == 1:
+            cmd_doctor([])
+        elif choice == 2:
+            cmd_deps([])
+        elif choice == 3:
+            cmd_visualizer(["off"] if visualizer_enabled() else ["on"])
+        elif choice == 4:
+            cmd_plugin(["list"])
+        elif choice == 5:
+            select_language()
+            continue
+        _press_any_key()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="nyxdeck",
+        description=t("部署与管理 NyxDeck 桌面。", "Deploy and manage the NyxDeck desktop."),
+    )
+    sub = p.add_subparsers(dest="command")
+
+    sub.add_parser("install", help=t("部署配置（调用 install.sh）", "deploy the configuration (runs install.sh)"))
+    sub.add_parser("status", help=t("部署是否已同步", "is the deployment up to date?"))
+    sub.add_parser("uninstall", help=t("移除部署的文件（机器状态保留）", "remove deployed files (machine state is kept)"))
+    sub.add_parser("doctor", help=t("检查依赖、会话与插件", "check dependencies, the session, and plugins"))
+    sub.add_parser("deps", help=t("安装核心软件包（pacman）；--check 只列出缺失",
+                                 "install the core packages (pacman); --check lists what is missing"))
+    sub.add_parser("plugin", help=t("管理 DMS 插件：list | install <id> | update [id]",
+                                    "manage DMS plugins: list | install <id> | update [id]"))
+    sub.add_parser("visualizer", help=t("NyxRings 桌面组件：on | off | status",
+                                        "NyxRings desktop widget: on | off | status"))
+    sub.add_parser("widget", help=t("桌面组件：list", "desktop widgets: list"))
+    sub.add_parser("lang", help=t("查看或设置语言：lang [zh|en]", "show or set the language: lang [zh|en]"))
+    return p
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help"):
+        build_parser().print_help()
+        return 0
+
+    if not argv:
+        # Interactive control panel; first run asks for the language.
+        if not sys.stdin.isatty():
+            build_parser().print_help()
+            return 0
+        if not _saved_lang():
+            select_language()
+        return main_menu()
+
+    command, rest = argv[0], argv[1:]
+    if command in ("install", "status", "uninstall"):
+        return cmd_deploy([command, *rest])
+    if command == "doctor":
+        return cmd_doctor(rest)
+    if command == "deps":
+        return cmd_deps(rest)
+    if command == "plugin":
+        return cmd_plugin(rest)
+    if command == "visualizer":
+        return cmd_visualizer(rest)
+    if command == "widget":
+        return cmd_widget(rest)
+    if command == "lang":
+        return cmd_lang(rest)
+
+    err(t(f"未知命令: {command}", f"unknown command: {command}"))
+    build_parser().print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

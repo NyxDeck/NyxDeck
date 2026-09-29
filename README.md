@@ -72,6 +72,35 @@ and a terminal (kitty by default) available. Before writing, it prints the
 list of changes. Any file it overwrites is backed up to
 `~/.config/.nyxdeck-backup/<timestamp>/`.
 
+## Command line
+
+`install.sh` links a `nyxdeck` command into `~/.local/bin`. Run it with no
+arguments for an interactive control panel (ASCII banner + menu); the first
+run asks for the language. Every command also works non-interactively:
+
+```bash
+nyxdeck                  # help
+nyxdeck install          # deploy the configuration (runs install.sh)
+nyxdeck status           # is the deployment up to date?
+nyxdeck uninstall        # remove deployed files (machine state is kept)
+nyxdeck doctor           # check dependencies, the session, and plugins
+nyxdeck deps [--check]   # install the core packages (cava, matugen, qt6ct, wtype)
+nyxdeck widget list      # desktop widgets
+nyxdeck plugin list
+nyxdeck plugin install <id>    # e.g. nyxRings, cavaVisualizer, enderPulse
+nyxdeck plugin update [id]     # git pull for repository plugins
+nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+```
+
+`install`, `status`, and `uninstall` are `install.sh`. The rest wrap DMS: the
+plugin manager, and the desktop-widget instances stored in
+`~/.config/DankMaterialShell/settings.json`. `nyxdeck visualizer on` installs
+the NyxRings plugin from its repository if needed, then adds a widget instance.
+
+Output is bilingual (zh / en), chosen from the locale (`LC_ALL`,
+`LC_MESSAGES`, `LANG`); set `NYXDECK_LANG=zh` or `en` to override. `install.sh`
+follows the same rule.
+
 ## Optional: audio visualizer
 
 DMS's built-in visualizer lives in the bar media widget and Dank Island and

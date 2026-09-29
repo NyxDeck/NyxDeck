@@ -33,6 +33,16 @@ PRESERVE=(
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Bilingual output. NYXDECK_LANG overrides the locale; otherwise Chinese when
+# the locale is Chinese, English otherwise.
+case "${NYXDECK_LANG:-${LC_ALL:-${LANG:-}}}" in
+    zh*) LANG_CODE=zh ;;
+    *)   LANG_CODE=en ;;
+esac
+msg() { # msg "<中文>" "<English>"
+    if [ "$LANG_CODE" = zh ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi
+}
+
 is_preserved() {
     local key="$1" p
     for p in "${PRESERVE[@]}"; do [ "$key" = "$p" ] && return 0; done
@@ -82,8 +92,15 @@ plan_changes() {
 
 do_deploy() {
     say "NyxDeck → $CONFIG_HOME"
+
+    # Command link, independent of whether the configs have drifted.
+    if [ -f "$REPO_DIR/nyxdeck" ]; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sfn "$REPO_DIR/nyxdeck" "$HOME/.local/bin/nyxdeck"
+    fi
+
     if ! plan_changes; then
-        say "已是最新，无改动。"
+        msg "已是最新，无改动。" "Already up to date."
         return 0
     fi
 
@@ -122,21 +139,23 @@ do_deploy() {
         chmod +x "$s"
     done < <(find "$CONFIG_HOME/niri/scripts" "$CONFIG_HOME/DankMaterialShell" "$CONFIG_HOME/matugen" -name '*.sh' -print0 2>/dev/null)
 
-    say "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/"
+    msg "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/" "Done. Previous files backed up to $BACKUP_ROOT/$STAMP/"
 }
 
 do_status() {
-    say "NyxDeck 部署状态："
+    msg "NyxDeck 部署状态：" "NyxDeck deployment status:"
     if plan_changes; then
         say ""
-        say "上面是待同步的差异。运行 ./install.sh 应用。"
+        msg "上面是待同步的差异。运行 ./install.sh 应用。" \
+            "The differences above are not deployed yet. Run ./install.sh to apply."
     else
-        say "  全部已同步。"
+        msg "  全部已同步。" "  Everything is in sync."
     fi
 }
 
 do_uninstall() {
-    say "移除 NyxDeck 部署的文件（机器状态与 DMS 运行时文件保留）："
+    msg "移除 NyxDeck 部署的文件（机器状态与 DMS 运行时文件保留）：" \
+        "Removing files deployed by NyxDeck (machine state and DMS runtime files are kept):"
     local key f dst
     while IFS=$'\t' read -r key f dst; do
         is_preserved "$key" && continue
@@ -145,12 +164,17 @@ do_uninstall() {
             rm -f "$dst"
         fi
     done < <(collect)
-    say "完成。"
+    local link="$HOME/.local/bin/nyxdeck"
+    if [ -L "$link" ] && [ "$(readlink -f "$link")" = "$REPO_DIR/nyxdeck" ]; then
+        rm -f "$link"
+        say "  - $link"
+    fi
+    msg "完成。" "Done."
 }
 
 case "${1:-install}" in
     install)   do_deploy ;;
     status)    do_status ;;
     uninstall) do_uninstall ;;
-    *)         die "用法: $0 [install|status|uninstall]" ;;
+    *)         die "$(msg "用法: $0 [install|status|uninstall]" "usage: $0 [install|status|uninstall]")" ;;
 esac
