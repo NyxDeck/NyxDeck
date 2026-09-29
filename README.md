@@ -236,7 +236,7 @@ the state it is about to replace, so a rollback can itself be rolled back.
 Tighter than that, each deploy still records only the files it changed under
 `~/.config/.nyxdeck-backup`.
 
-### Scope
+### What is not covered here
 
 The lifecycle is complete — install, update, verify, snapshot, roll back,
 uninstall — and the list of what this repository deliberately leaves to
@@ -278,8 +278,6 @@ from the argument parser and the keybindings are parsed from the niri
 configuration in use, so the cheatsheet cannot go stale. The `nyxhelp` and
 `clean` aliases still work.
 
-### Prompt styles
-
 ### Mihomo TUN pipeline
 
 `nyxdeck mihomo install` owns the whole chain and is idempotent:
@@ -300,6 +298,57 @@ falls back to the hosted dashboard with the secret on the clipboard.
 Output is bilingual (zh / en), chosen from the locale (`LC_ALL`,
 `LC_MESSAGES`, `LANG`); set `NYXDECK_LANG=zh` or `en` to override. `install.sh`
 follows the same rule.
+
+## Verifying an installation
+
+Two levels of checking, neither of which needs a graphical session.
+
+**Deploy into a throwaway HOME.** The cheapest way to prove the deploy path works
+from scratch:
+
+```bash
+rm -rf /tmp/freshhome && mkdir -p /tmp/freshhome
+HOME=/tmp/freshhome XDG_CONFIG_HOME=/tmp/freshhome/.config ./install.sh install
+niri validate -c /tmp/freshhome/.config/niri/config.kdl
+```
+
+`install.sh` validates the deployed niri configuration itself before it finishes,
+so a missing include is reported immediately instead of when the session starts.
+This is worth running after touching `configs/niri/`: a stale check catches
+exactly the class of fault that only appears at login.
+
+**The whole pipeline on a clean system.** Packages, deployment and tooling, in a
+container built from the host's own repositories and package cache:
+
+```bash
+sudo pacman -S --needed arch-install-scripts
+ROOT=/tmp/nyxdeck-test && mkdir -p "$ROOT"
+sudo pacstrap -C /etc/pacman.conf -K "$ROOT" \
+    base niri dms-shell kitty fish starship fastfetch fzf matugen cava \
+    qt6ct wtype wlsunset mpvpaper ffmpeg jq eza python-gobject gtk-layer-shell \
+    ttf-jetbrains-mono-nerd noto-fonts-cjk
+sudo systemd-nspawn -q -D "$ROOT" useradd -m tester
+sudo systemd-nspawn -q -D "$ROOT" --bind="$PWD:/src" --uid=tester \
+    /bin/bash -lc 'cd /src && ./install.sh install \
+        && niri validate -c ~/.config/niri/config.kdl \
+        && export PATH=$HOME/.local/bin:$PATH \
+        && nyxdeck deps --check && nyxdeck shell doctor'
+sudo rm -rf "$ROOT"
+```
+
+Using `pacstrap` rather than a container image keeps the repository configuration
+identical to the target machine — `dms-shell` and `mpvpaper` come from the
+CachyOS repositories, and a plain Arch image would need them from the AUR instead.
+
+Last run: 388 packages installed, the deploy finished with `niri configuration
+validates`, `deps --check` reported everything present, and the shell layer came
+out clean. The panel rendered inside the container too — picking that
+distribution's own logo (the Arch art there, the CachyOS one here) and falling
+back to `? · dark` where no palette exists yet.
+
+What a container cannot prove is the session itself: niri starting, DMS running,
+the display manager, font and emoji rendering. Those need a real GPU and
+compositor.
 
 ## Optional: audio visualizer
 
