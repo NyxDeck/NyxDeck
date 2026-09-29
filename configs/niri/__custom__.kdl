@@ -1,0 +1,16 @@
+// NyxDeck custom configuration.
+//
+// This file is preserved across updates. Machine- or user-specific additions
+// belong here. Examples:
+//
+// spawn-at-startup "fcitx5" "-d"
+// spawn-at-startup "easyeffects" "--gapplication-service"
+//
+// window-rule {
+//     match app-id="my-custom-app"
+//     open-floating true
+// }
+//
+// binds {
+//     Ctrl+Q { spawn "my-command"; }
+// }

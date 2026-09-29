@@ -1,0 +1,28 @@
+gestures {
+    hot-corners {
+        off
+    }
+}
+
+input {
+    warp-mouse-to-focus
+
+    keyboard {
+        xkb {
+            // Uncomment to map CapsLock to an additional Super key:
+            // options "caps:super"
+        }
+
+        numlock
+    }
+    touchpad {
+        tap
+        natural-scroll
+        dwt   // disable the touchpad while typing
+        dwtp  // disable touchpad pointer movement while typing
+    }
+    mouse {
+        accel-speed 0.0
+    }
+    trackpoint
+}

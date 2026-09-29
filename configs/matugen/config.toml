@@ -1,0 +1,23 @@
+# NyxDeck 用户 matugen 模板。
+#
+# DMS 生成主题时会把这里声明的模板和它内建的合并执行，所以每次换壁纸 /
+# 切深浅都会跟着重渲染。
+#
+# 注意：DMS 是用**字符串搜索**从本文件里截取 config 段和 templates 段的，
+# 不是解析 TOML 再取表。所以有两条硬规矩：
+#   1. 注释里绝不能出现那两个段名的方括号字面量，否则会被当成段起点
+#      （踩过坑：注释里提了一句，导致整份合并配置解析失败）。
+#   2. templates 段前面要有一个只有段名的空表头，DMS 才认得；直接写
+#      [templates.名字] 它匹配不到。
+#
+# 路径里的 /home/user 由 install.sh 部署时替换成实际 $HOME——DMS 只对
+# 自己的配置做 SHELL_DIR/CONFIG_DIR 替换，用户段是原样追加的。
+
+[config]
+
+[templates]
+
+[templates.nyxdeck_starship]
+input_path = '/home/user/.config/matugen/templates/starship-palette.toml'
+output_path = '/home/user/.cache/nyxdeck/starship-palette.toml'
+post_hook = '/home/user/.config/matugen/splice-starship.sh'

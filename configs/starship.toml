@@ -1,0 +1,186 @@
+palette = "dms"
+
+# Format Layout (Pawlette Standard Order: Who -> Where -> Git Context -> Proxy)
+format = """\
+[╭╴](fg:magenta)\
+$os\
+$username\
+(\
+    at \
+    $directory\
+)\
+$git_branch\
+$cmd_duration${custom.proxy}\
+(\
+    $python\
+    $conda\
+    $nodejs\
+    $c\
+    $rust\
+    $java\
+)
+[╰─](fg:magenta)$character\
+"""
+
+# Enable blank line between commands
+add_newline = true
+
+[character]
+success_symbol = "[󰍟](fg:magenta)"
+error_symbol = "[󰍟](fg:red)"
+
+[os]
+format = "[$symbol]($style)"
+style = "bold magenta"
+disabled = false
+
+[os.symbols]
+Alpine = " "
+Arch = " "
+CachyOS = " "
+Debian = " "
+EndeavourOS = " "
+Fedora = " "
+Linux = " "
+Macos = " "
+Manjaro = " "
+Mint = " "
+NixOS = " "
+openSUSE = " "
+Pop = " "
+SUSE = " "
+Ubuntu = " "
+Windows = " "
+
+[username]
+style_user = "bold magenta"
+style_root = "bold red"
+format = "[$user]($style) "
+disabled = false
+show_always = true
+
+[directory]
+format = "[$path](bold fg:magenta)[$read_only]($read_only_style) "
+truncation_length = 2
+style = "fg:magenta"
+read_only_style = "fg:magenta"
+before_repo_root_style = "fg:magenta"
+truncation_symbol = "…/"
+truncate_to_repo = true
+read_only = "  "
+
+[time]
+disabled = true
+
+[cmd_duration]
+disabled = false
+format = "took [ $duration]($style) "
+style = "bold fg:red"
+min_time = 500
+
+[git_branch]
+format = "via [$symbol$branch]($style) "
+style = "bold fg:cyan"
+symbol = " "
+
+[git_status]
+disabled = true
+
+[docker_context]
+disabled = false
+symbol = " "
+
+[package]
+disabled = false
+
+[nodejs]
+format = "[$symbol$version]($style) "
+style = "bold fg:green"
+symbol = " "
+version_format = "${raw}"
+disabled = false
+
+[python]
+disabled = false
+format = '[${symbol}${pyenv_prefix}(${version})( \($virtualenv\))]($style) '
+symbol = " "
+version_format = "${raw}"
+style = "bold fg:yellow"
+
+[conda]
+format = "[$symbol$environment]($style) "
+style = "bold fg:green"
+ignore_base = false
+disabled = false
+symbol = " "
+
+[java]
+format = "[$symbol$version]($style) "
+style = "bold fg:red"
+version_format = "${raw}"
+symbol = " "
+disabled = false
+
+[c]
+format = "[$symbol($version(-$name))]($style) "
+style = "bold fg:cyan"
+symbol = " "
+version_format = "${raw}"
+disabled = false
+
+[rust]
+format = "[$symbol$version]($style) "
+style = "bold fg:magenta"
+symbol = " "
+version_format = "${raw}"
+disabled = false
+
+[custom.proxy]
+command = "echo $http_proxy $all_proxy $HTTP_PROXY $ALL_PROXY | tr ' ' '\\n' | grep -v '^$' | head -n1 | sed -E 's|.*:||'"
+when = "test -n \"$http_proxy\" -o -n \"$all_proxy\" -o -n \"$HTTP_PROXY\" -o -n \"$ALL_PROXY\""
+style = "bold fg:yellow"
+format = "[󰲝 $output]($style) "
+
+# >>> DMS STARSHIP PALETTE >>>
+# Generated from DMS's dms-colors.json - do not edit manually
+# (static fallback; DMS's matugen re-renders this on every wallpaper change)
+
+[palettes.dms]
+# Standard colors
+blue      = "#d0bcff"
+red       = "#f2b8b5"
+green     = "#ccc2dc"
+yellow    = "#ccc2dc"
+cyan      = "#ccc2dc"
+magenta   = "#ccc2dc"
+white     = "#e6e0e9"
+black     = "#49454e"
+
+# Extended palette (Catppuccin-compatible names)
+rosewater = "#ccc2dc"
+flamingo  = "#f2b8b5"
+pink      = "#ccc2dc"
+mauve     = "#ccc2dc"
+maroon    = "#f2b8b5"
+peach     = "#ccc2dc"
+teal      = "#ccc2dc"
+sky       = "#ccc2dc"
+sapphire  = "#d0bcff"
+lavender  = "#ccc2dc"
+
+# Text shades
+text      = "#e6e0e9"
+subtext1  = "#e6e0e9"
+subtext0  = "#cac4cf"
+
+# Surface shades
+overlay2  = "#cac4cf"
+overlay1  = "#cac4cf"
+overlay0  = "#49454e"
+surface2  = "#49454e"
+surface1  = "#49454e"
+surface0  = "#141218"
+base      = "#141218"
+mantle    = "#141218"
+crust     = "#141218"
+# <<< DMS STARSHIP PALETTE <<<

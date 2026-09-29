@@ -1,0 +1,149 @@
+# NyxDeck
+
+NyxDeck is an independent, self-contained desktop configuration for Wayland.
+It combines the [niri](https://github.com/YaLTeR/niri) compositor with
+[DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell) (DMS)
+and a matugen-based theming pipeline, and it deploys as a single unit without
+depending on any other configuration project.
+
+## Scope
+
+NyxDeck is responsible for:
+
+- **niri configuration** (`~/.config/niri/`): key bindings, window and layer
+  rules, layout, animations, and utility scripts (wallpaper picker, Orbit
+  launcher, scratchpad, eye-care, brightness, and media control).
+- **DankMaterialShell**: configuration and session startup
+  (`~/.config/DankMaterialShell/`).
+- **Theming**: DMS generates Material You color schemes for GTK, niri,
+  fcitx5, kitty, qt6ct, and Firefox. NyxDeck supplies the templates that DMS
+  does not provide (currently starship) and the application entry points that
+  import the generated output.
+- **starship configuration** (`~/.config/starship.toml`).
+
+NyxDeck intentionally does not manage:
+
+- **Machine- and user-specific state**: `monitor.kdl`, `input__custom__.kdl`,
+  `__custom__.kdl`, `orbit-items__custom__.toml`, `effects.kdl`, and
+  `starship.toml`. These files are created only when absent and are never
+  overwritten.
+- **Any desktop shell other than DMS.**
+
+## Repository layout
+
+```
+configs/
+  niri/                  → ~/.config/niri/
+    config.kdl           main configuration; includes fragments and starts DMS
+    binds.kdl            key bindings (dispatch through the dms CLI)
+    rules.kdl            window and layer rules
+    layout.kdl           layout, animations.kdl, monitor.kdl, effects_*.kdl
+    __custom__.kdl       user/machine state (not overwritten on deploy)
+    input__custom__.kdl
+    scripts/             wallpaper picker, Orbit, scratchpad, eye-care,
+                         brightness, media control
+  DankMaterialShell/     → ~/.config/DankMaterialShell/
+    start.sh             session entry point that launches DMS
+  matugen/               → ~/.config/matugen/
+    config.toml          registers the user templates below
+    templates/           starship palette template
+    splice-starship.sh   post-hook that splices the palette into starship.toml
+  gtk-3.0/               → ~/.config/gtk-3.0/     (imports dank-colors.css)
+  gtk-4.0/               → ~/.config/gtk-4.0/     (imports dank-colors.css)
+  kitty/                 → ~/.config/kitty/       (includes dank-theme.conf)
+  qt6ct/                 → ~/.config/qt6ct/       (selects the matugen scheme)
+  starship.toml          → ~/.config/starship.toml
+themes/                  custom DMS theme JSON files
+docs/                    design documentation
+```
+
+## Installation
+
+```bash
+git clone https://github.com/NyxDeck/NyxDeck.git ~/NyxDeck
+cd ~/NyxDeck
+./install.sh            # deploy and list changes
+./install.sh status     # show whether the deployment is up to date
+./install.sh uninstall  # remove deployed files (machine state is retained)
+```
+
+The installer assumes a working niri session with DankMaterialShell, matugen,
+and a terminal (kitty by default) available. Before writing, it prints the
+list of changes. Any file it overwrites is backed up to
+`~/.config/.nyxdeck-backup/<timestamp>/`.
+
+## Optional: audio visualizer
+
+DMS's built-in visualizer lives in the bar media widget and Dank Island and
+only requires `cava`:
+
+```bash
+sudo pacman -S cava
+```
+
+**NyxRings** is a separate plugin, open-sourced at
+[github.com/NyxDeck/nyxRings](https://github.com/NyxDeck/nyxRings); this
+repository does not vendor it. It is a fully transparent desktop widget
+rendering a port of Noctalia's *wave_rings* effect: concentric rings and a
+polar spectrum around an empty centre, driven by cava. Install it into DMS's
+plugin directory and restart:
+
+```bash
+git clone https://github.com/NyxDeck/nyxRings.git \
+    ~/.config/DankMaterialShell/plugins/nyxRings
+dms restart
+```
+
+Then add one instance under **Settings → Desktop Widgets**. Its appearance is
+set by the widget's properties (`sensitivity`, `rotationSpeed`, `ringOpacity`,
+`bloomIntensity`, `waveThickness`, `innerDiameter`, `fadeWhenIdle`); the
+colours follow the theme's primary and secondary. See the plugin's README.
+
+Registry alternatives, also added under Settings → Desktop Widgets:
+
+- **EnderPulse** — braille, spectrum, mirrored pulse, radial orbit.
+- **Cava Visualizer** — bars, curve outline, curve filled.
+
+AudioFX offers a screen-edge spectrum, a wallpaper glow, and a player disc.
+The edge spectrum and the glow are full-screen background layers (on niri the
+wallpaper is drawn over them); using them needs these layer rules in
+`configs/niri/rules.kdl`:
+
+```kdl
+layer-rule { match namespace="^audiofx$"      place-within-backdrop true }
+layer-rule { match namespace="^audiofx-glow$" place-within-backdrop true }
+```
+
+DMS never adds plugin desktop widgets automatically: create one instance per
+widget under **Settings → Desktop Widgets**. Instance position and size are
+part of DMS's own state, not this repository.
+
+## License
+
+Licensed under GPL-3.0. See [LICENSE](LICENSE).
+
+## Operational notes
+
+- DMS writes compositor colors into `~/.config/niri/dms/colors.kdl` at a
+  fixed path, which niri then includes. Because that directory is owned by
+  this project, DMS output and the compositor configuration are always
+  managed together.
+- DMS rewrites `~/.config/starship.toml` at runtime (through its matugen
+  post-hook). The copy in this repository is an initial value only; it is
+  written when the target is absent and is otherwise left untouched.
+
+## Troubleshooting
+
+**Icons render as blank or checkered placeholders.** DMS selects and indexes
+its own icon theme, and it cannot resolve every system theme (the Breeze
+family, for example). Choose a resolvable theme in DMS Settings -> Icon
+Theming, or from a shell:
+
+```bash
+dms ipc call settings set iconThemeDark Adwaita
+dms ipc call settings set iconThemeLight Adwaita
+dms restart
+```
+
+See `docs/architecture.md` for the deploy model and `docs/matugen.md` for the
+theming pipeline.

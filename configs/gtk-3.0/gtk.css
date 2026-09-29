@@ -1,0 +1,4 @@
+/* NyxDeck — DMS owns the colors; this only pulls them in.
+ * DMS's matugen writes dank-colors.css next to this file on every
+ * wallpaper/theme change. */
+@import url("dank-colors.css");

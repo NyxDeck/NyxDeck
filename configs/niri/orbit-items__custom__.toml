@@ -1,0 +1,111 @@
+# =============================================================================
+# NyxDeck Orbit Launcher · item configuration
+# =============================================================================
+# This file is preserved across updates (it carries the __custom__ marker).
+#
+# Sections:
+# - [search]:        global search behaviour (default engine, placeholder)
+# - [[search_engines]]: engine/AI wheel entries, cycled with Tab / Shift+Tab
+# - [[items]]:       ring items (applications, folders, and web links)
+# =============================================================================
+
+[search]
+default_engine = "google"
+placeholder = "Search or ask..."
+
+# -----------------------------------------------------------------------------
+# Search engines (cycled with Tab / Shift+Tab)
+# -----------------------------------------------------------------------------
+[[search_engines]]
+id = "google"
+name = "Google"
+icon = "󰊭"
+url = "https://www.google.com/search?q={query}"
+
+[[search_engines]]
+id = "bing"
+name = "Bing"
+icon = "󰍉"
+url = "https://www.bing.com/search?q={query}"
+
+[[search_engines]]
+id = "deepseek"
+name = "DeepSeek"
+icon = "󰈺"
+url = "https://chat.deepseek.com/?q={query}"
+
+[[search_engines]]
+id = "chatgpt"
+name = "ChatGPT"
+icon = "󰚩"
+url = "https://chatgpt.com/?hints=search&q={query}"
+
+[[search_engines]]
+id = "claude"
+name = "Claude"
+icon = "󰣆"
+url = "https://claude.ai/new?q={query}"
+
+# -----------------------------------------------------------------------------
+# Ring items (up to four top-level capsules; shortcut 1-4 launches directly)
+# -----------------------------------------------------------------------------
+[[items]]
+id = "kitty"
+name = "Kitty"
+desc = "Terminal"
+icon = "󰞷"
+cmd = "kitty"
+shortcut = "1"
+color_key = "secondary"
+
+[[items]]
+id = "tools"
+name = "System Tools"
+desc = "Folder"
+icon = "󰘳"
+shortcut = "2"
+color_key = "secondary"
+
+  [[items.children]]
+  id = "eyecare"
+  name = "Eye Care"
+  desc = "Toggle Warmth"
+  icon = "󰛨"
+  cmd = "~/.config/niri/scripts/toggle-eyecare.sh"
+  shortcut = "1"
+  color_key = "secondary"
+
+  [[items.children]]
+  id = "wallpaper-tools"
+  name = "Wallpapers"
+  desc = "Static & Live"
+  icon = "󰸉"
+  cmd = "~/.config/niri/scripts/wallpaper-picker.py"
+  shortcut = "2"
+  color_key = "secondary"
+
+[[items]]
+id = "websites"
+name = "Websites"
+desc = "Folder"
+icon = "󰖟"
+shortcut = "3"
+color_key = "secondary"
+
+  [[items.children]]
+  id = "github"
+  name = "GitHub"
+  desc = "Code Repository"
+  icon = "󰊤"
+  url = "https://github.com"
+  shortcut = "1"
+  color_key = "secondary"
+
+[[items]]
+id = "wallpaper"
+name = "Wallpapers"
+desc = "Static & Live"
+icon = "󰸉"
+cmd = "~/.config/niri/scripts/wallpaper-picker.py"
+shortcut = "4"
+color_key = "secondary"
