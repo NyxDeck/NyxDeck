@@ -35,7 +35,10 @@ LOGO_FILE = CONFIG_HOME / "nyxdeck" / "logo"
 VERSION = "0.1.0"
 
 # Packages NyxDeck needs at runtime.
-CORE_DEPS = ["cava", "matugen", "qt6ct", "wtype"]
+# Packages NyxDeck needs at runtime. fastfetch/starship are what the
+# terminal layer (panel, prompt) is built on; fzf only makes the pickers
+# nicer and stays optional.
+CORE_DEPS = ["cava", "matugen", "qt6ct", "wtype", "fastfetch", "starship"]
 
 # Plugins installed by cloning a repository. Other ids go through
 # `dms plugins install` (the registry).
@@ -1465,6 +1468,139 @@ def cmd_help(_: list[str]) -> int:
     return 0
 
 
+# ── One-shot setup, self-update, snapshots ───────────────────────────────────
+
+SETUP_STEPS_NOTE = "pre-setup"
+
+
+def cmd_backup(argv: list[str]) -> int:
+    """Snapshots of the managed configuration, and rollback."""
+    script = REPO / "install.sh"
+    if not script.is_file():
+        err(t("找不到 install.sh", "install.sh not found"))
+        return 1
+    action = argv[0] if argv else "list"
+    if action in ("list", "ls", "show"):
+        return subprocess.run([str(script), "snapshots"]).returncode
+    if action in ("create", "snapshot", "save"):
+        note = " ".join(argv[1:]).strip()
+        return subprocess.run([str(script), "snapshot", note]).returncode
+    if action in ("restore", "rollback", "undo"):
+        return subprocess.run([str(script), "rollback", argv[1] if len(argv) > 1 else "1"]).returncode
+    err(t(f"未知的 backup 操作: {action}（list | create [备注] | restore [序号|名称]）",
+          f"unknown backup action: {action} (list | create [note] | restore [index|name])"))
+    return 2
+
+
+def backup_menu() -> None:
+    while True:
+        items = [
+            t("列出快照", "list snapshots"),
+            t("创建快照（可加备注）", "create a snapshot (with an optional note)"),
+            t("回滚到第 N 个快照", "roll back to snapshot N"),
+            t("返回", "Back"),
+        ]
+        choice = _menu(t("快照 / 回滚", "Snapshots / rollback"), items)
+        if choice is None or choice == 3:
+            return
+        clear_screen()
+        if choice == 0:
+            cmd_backup(["list"])
+        elif choice == 1:
+            note = _prompt(t("备注（可留空）", "note (optional)"))
+            cmd_backup(["create", note or ""])
+        elif choice == 2:
+            cmd_backup(["list"])
+            say("")
+            index = _prompt(t("要回滚到第几个", "which snapshot number"))
+            if index:
+                cmd_backup(["restore", index])
+        _press_any_key()
+
+
+def cmd_setup(argv: list[str]) -> int:
+    """One command for a fresh machine: dependencies, configuration, the
+    declared plugins, and the mihomo chain."""
+    dry = "--dry-run" in argv or "-n" in argv
+    steps: list[tuple[str, object]] = []
+
+    if "--no-deps" not in argv:
+        steps.append((t("核心依赖（pacman/AUR）", "core dependencies (pacman/AUR)"),
+                      lambda: cmd_deps([])))
+    steps.append((t("部署配置", "deploy the configuration"),
+                  lambda: cmd_deploy(["install"])))
+    if "--no-plugins" not in argv:
+        for plugin in PLUGIN_REPOS:
+            steps.append((t(f"插件 {plugin}", f"plugin {plugin}"),
+                          lambda plugin=plugin: _install_repo_plugin(plugin, PLUGIN_REPOS[plugin])))
+    if "--no-mihomo" not in argv:
+        steps.append((t("Mihomo TUN 链路（内核 → 配置 → 面板 → 服务 → 插件）",
+                        "Mihomo TUN pipeline (core → config → dashboard → unit → plugin)"),
+                      lambda: cmd_mihomo(["install"])))
+    steps.append((t("重启 DMS", "restart DMS"), lambda: dms_restart() or 0))
+
+    say(t("NyxDeck 一键安装", "NyxDeck one-shot setup"))
+    if dry:
+        for label, _ in steps:
+            say(f"  · {label}")
+        say("")
+        say(t("（--dry-run，未执行）", "(--dry-run, nothing was done)"))
+        return 0
+
+    # Snapshot first, so a setup that goes wrong is one command away from undone.
+    script = REPO / "install.sh"
+    if script.is_file():
+        subprocess.run([str(script), "snapshot", SETUP_STEPS_NOTE], check=False)
+
+    failed = []
+    for label, action in steps:
+        say("")
+        say(f"{ACCENT}:: {label}{R}")
+        try:
+            code = action()
+        except Exception:
+            code = 1
+        if code not in (0, None):
+            failed.append(label)
+
+    say("")
+    if failed:
+        warn(t(f"{len(failed)} 步未成功：{'、'.join(failed)}",
+               f"{len(failed)} step(s) did not succeed: {', '.join(failed)}"))
+        say(t("（可用 nyxdeck backup restore 回到安装前）",
+              "(nyxdeck backup restore undoes it)"))
+        return 1
+    ok(t("全套链路就绪", "the whole pipeline is ready"))
+    return 0
+
+
+def cmd_update(argv: list[str]) -> int:
+    """Update from git, redeploy, refresh the declared plugins."""
+    if not (REPO / ".git").is_dir():
+        err(t(f"{REPO} 不是 git 检出，无法自动更新", f"{REPO} is not a git checkout"))
+        return 1
+    before = _capture(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"])
+    if subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"]).returncode != 0:
+        warn(t("git pull 失败（本地是否有未提交改动？）",
+               "git pull failed (uncommitted changes?)"))
+        return 1
+    after = _capture(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"])
+    say(t(f"仓库 {before} → {after}", f"repository {before} → {after}"))
+    if before == after:
+        say(t("已是最新。", "already up to date."))
+
+    rc = cmd_deploy(["install"])
+    if "--no-plugins" not in argv:
+        for plugin in PLUGIN_REPOS:
+            target = plugin_dir(plugin)
+            if (target / ".git").is_dir():
+                say(t(f"更新插件 {plugin}", f"updating plugin {plugin}"))
+                subprocess.run(["git", "-C", str(target), "pull", "--ff-only"], check=False)
+    dms_restart()
+    ok(t("更新完成", "update complete"))
+    return rc
+
+
 def shell_menu() -> None:
     while True:
         items = [
@@ -1518,62 +1654,49 @@ def logo_menu() -> None:
 
 # ── Interactive control panel ────────────────────────────────────────────────
 
+def show_fetch() -> None:
+    clear_screen()
+    show_logo()
+    cmd_fetch([])
+
+
+def show_help() -> None:
+    clear_screen()
+    show_logo()
+    cmd_help([])
+
+
 def main_menu() -> int:
     while True:
         vis = t("可视化：开", "Visualizer: on") if visualizer_enabled() else t("可视化：关", "Visualizer: off")
-        items = [
-            t("部署配置", "Deploy configuration"),
-            t("体检", "Doctor"),
-            t("安装核心软件包", "Install core packages"),
-            t("Mihomo TUN", "Mihomo TUN"),
-            vis,
-            t("插件（按分类）", "Plugins (by category)"),
-            t("终端面板", "Terminal panel"),
-            t("标语 / Tagline", "Tagline"),
-            t("Logo", "Logo"),
-            t("shell 层", "Shell layer"),
-            t("速查表（nyxhelp）", "Cheatsheet (nyxhelp)"),
-            t("语言 / Language", "Language"),
-            t("退出", "Exit"),
+        # (label, action, stays in the menu). A None action means "leave"; an
+        # action that redraws its own screen stays, otherwise we wait for a key.
+        entries: list[tuple[str, object, bool]] = [
+            (t("部署配置", "Deploy configuration"), lambda: cmd_deploy(["install"]), False),
+            (t("一键安装（全套链路）", "One-shot setup (whole pipeline)"), lambda: cmd_setup([]), False),
+            (t("检查更新并重新部署", "Update and redeploy"), lambda: cmd_update([]), False),
+            (t("体检", "Doctor"), lambda: cmd_doctor([]), False),
+            (t("安装核心软件包", "Install core packages"), lambda: cmd_deps([]), False),
+            (t("快照 / 回滚", "Snapshots / rollback"), backup_menu, True),
+            (t("Mihomo TUN", "Mihomo TUN"), mihomo_menu, True),
+            (vis, lambda: cmd_visualizer(["off"] if visualizer_enabled() else ["on"]), False),
+            (t("插件（按分类）", "Plugins (by category)"), lambda: cmd_plugin(["list"]), False),
+            (t("终端面板", "Terminal panel"), show_fetch, False),
+            (t("标语 / Tagline", "Tagline"), tagline_menu, True),
+            (t("Logo", "Logo"), logo_menu, True),
+            (t("shell 层", "Shell layer"), shell_menu, True),
+            (t("速查表（nyxhelp）", "Cheatsheet (nyxhelp)"), show_help, False),
+            (t("语言 / Language", "Language"), select_language, True),
+            (t("退出", "Exit"), None, True),
         ]
-        choice = _menu(t("控制面板", "Control panel"), items)
-        if choice is None or choice == 12:
+        choice = _menu(t("控制面板", "Control panel"), [label for label, _, _ in entries])
+        if choice is None or entries[choice][1] is None:
             return 0
         clear_screen()
-        if choice == 0:
-            cmd_deploy(["install"])
-        elif choice == 1:
-            cmd_doctor([])
-        elif choice == 2:
-            cmd_deps([])
-        elif choice == 3:
-            mihomo_menu()
-            continue
-        elif choice == 4:
-            cmd_visualizer(["off"] if visualizer_enabled() else ["on"])
-        elif choice == 5:
-            cmd_plugin(["list"])
-        elif choice == 6:
-            clear_screen()
-            show_logo()
-            cmd_fetch([])
-        elif choice == 7:
-            tagline_menu()
-            continue
-        elif choice == 8:
-            logo_menu()
-            continue
-        elif choice == 9:
-            shell_menu()
-            continue
-        elif choice == 10:
-            clear_screen()
-            show_logo()
-            cmd_help([])
-        elif choice == 11:
-            select_language()
-            continue
-        _press_any_key()
+        _, action, stays = entries[choice]
+        action()
+        if not stays:
+            _press_any_key()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1593,6 +1716,12 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
+    sub.add_parser("setup", help=t("一键安装全套链路：依赖 → 配置 → 插件 → Mihomo（--dry-run/--no-mihomo/--no-plugins/--no-deps）",
+                                    "one-shot setup: deps → configuration → plugins → Mihomo (--dry-run/--no-mihomo/--no-plugins/--no-deps)"))
+    sub.add_parser("update", help=t("从 git 更新并重新部署（含声明的插件）",
+                                    "update from git and redeploy (including declared plugins)"))
+    sub.add_parser("backup", help=t("快照与回滚：list | create [备注] | restore [序号|名称]",
+                                    "snapshots and rollback: list | create [note] | restore [index|name]"))
     sub.add_parser("shell", help=t("shell 层：status | doctor | install | edit",
                                    "shell layer: status | doctor | install | edit"))
     sub.add_parser("clean", help=t("缓存清理（clean-cache.py）", "cache cleaner (clean-cache.py)"))
@@ -1636,6 +1765,12 @@ def main(argv: list[str]) -> int:
         return cmd_plugin(rest)
     if command == "mihomo":
         return cmd_mihomo(rest)
+    if command == "setup":
+        return cmd_setup(rest)
+    if command == "update":
+        return cmd_update(rest)
+    if command == "backup":
+        return cmd_backup(rest)
     if command in ("help", "cheatsheet"):
         return cmd_help(rest)
     if command == "shell":

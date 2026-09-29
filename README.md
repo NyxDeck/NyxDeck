@@ -91,6 +91,12 @@ nyxdeck plugin install <id> [--force]
 nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck setup                  # one-shot install: deps → config → plugins → Mihomo
+nyxdeck setup --dry-run        # just list the steps
+nyxdeck update                 # git pull, redeploy, refresh the declared plugins
+nyxdeck backup list            # snapshots of every managed file
+nyxdeck backup create "note"   # take one
+nyxdeck backup restore 2       # roll back (the previous state is snapshotted first)
 nyxdeck shell doctor           # shell layer: what is deployed, what is left over
 nyxdeck shell edit             # open the preserved __custom__.fish
 nyxdeck clean                  # cache cleaner (the `clean` alias runs the same)
@@ -210,6 +216,25 @@ own configuration is about to initialise starship; it defers to the first
 `fish_prompt` event and checks `STARSHIP_SHELL` there, which means it initialises
 starship on a box that has none and does nothing on a box that already does
 (initialising twice would duplicate key bindings).
+
+### One-shot install, updates and snapshots
+
+`nyxdeck setup` is the whole pipeline in one command: it installs the runtime
+dependencies, deploys the configuration, clones the plugins declared in
+`PLUGIN_REPOS`, runs the Mihomo TUN pipeline and restarts DMS. It takes a
+snapshot first, so a setup that goes wrong is one `nyxdeck backup restore` away
+from undone; `--dry-run` lists the steps, `--no-mihomo` / `--no-plugins` /
+`--no-deps` narrow them down. `CORE_DEPS` includes fastfetch and starship,
+because the panel and the prompt are built on them.
+
+`nyxdeck update` pulls this repository (`--ff-only`), redeploys and refreshes
+every declared plugin checkout.
+
+`nyxdeck backup` keeps snapshots — a copy of the current state of every managed
+file — in `~/.config/.nyxdeck-snapshots`, newest ten kept. `rollback` snapshots
+the state it is about to replace, so a rollback can itself be rolled back.
+Tighter than that, each deploy still records only the files it changed under
+`~/.config/.nyxdeck-backup`.
 
 ### Shell layer
 

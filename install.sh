@@ -11,6 +11,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 BACKUP_ROOT="$CONFIG_HOME/.nyxdeck-backup"
+SNAP_ROOT="$CONFIG_HOME/.nyxdeck-snapshots"
+SNAPSHOT_KEEP=10
+BACKUP_KEEP=10
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 # configs/<subdir> is deployed onto ~/.config/<subdir>.
@@ -242,9 +245,93 @@ do_uninstall() {
     msg "完成。" "Done."
 }
 
+# ── snapshots ────────────────────────────────────────────────────────────────
+# A deploy backup only holds what that deploy changed; a snapshot holds the
+# current state of every managed file, so a rollback is one command.
+
+prune_snapshots() {
+    local roots=("$SNAP_ROOT" "$BACKUP_ROOT") root dirs i
+    for root in "${roots[@]}"; do
+        [ -d "$root" ] || continue
+        mapfile -t dirs < <(find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r)
+        local keep=$SNAPSHOT_KEEP
+        [ "$root" = "$BACKUP_ROOT" ] && keep=$BACKUP_KEEP
+        for ((i = keep; i < ${#dirs[@]}; i++)); do
+            rm -rf "$root/${dirs[$i]}"
+        done
+    done
+}
+
+snapshot_paths() { # $1 = destination directory
+    local key f dst
+    while IFS=$'\t' read -r key f dst; do
+        [ -e "$dst" ] || continue
+        mkdir -p "$1/$(dirname "$key")"
+        cp -a "$dst" "$1/$key" 2>/dev/null || cp -p "$dst" "$1/$key"
+    done < <(collect)
+}
+
+do_snapshot() {
+    local note="${1:-}"
+    local dir="$SNAP_ROOT/$(date +%Y%m%d-%H%M%S)"
+    [ -e "$dir" ] && dir="$dir.$$"
+    mkdir -p "$dir"
+    snapshot_paths "$dir"
+    [ -n "$note" ] && printf '%s\n' "$note" > "$dir/NOTE"
+    say "  + $dir"
+    prune_snapshots
+    msg "快照已创建。" "Snapshot created."
+}
+
+do_snapshots() {
+    [ -d "$SNAP_ROOT" ] || { msg "还没有快照。" "No snapshots yet."; return 0; }
+    local dirs i=1 d note count
+    mapfile -t dirs < <(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r)
+    [ ${#dirs[@]} -eq 0 ] && { msg "还没有快照。" "No snapshots yet."; return 0; }
+    for d in "${dirs[@]}"; do
+        note="$(cat "$SNAP_ROOT/$d/NOTE" 2>/dev/null || true)"
+        count="$(find "$SNAP_ROOT/$d" -type f ! -name NOTE 2>/dev/null | wc -l)"
+        printf '  %2d  %-16s %4s files  %s\n' "$i" "${d:0:15}" "$count" "$note"
+        i=$((i + 1))
+    done
+}
+
+do_rollback() {
+    local arg="${1:-1}" dirs target src key f dst
+    [ -d "$SNAP_ROOT" ] || die "$(msg "还没有快照" "no snapshots yet")"
+    mapfile -t dirs < <(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -r)
+    [ ${#dirs[@]} -eq 0 ] && die "$(msg "还没有快照" "no snapshots yet")"
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        target="${dirs[$((arg - 1))]:-}"
+        [ -n "$target" ] || die "$(msg "没有第 $arg 个快照" "no snapshot number $arg")"
+    else
+        target="$arg"
+    fi
+    src="$SNAP_ROOT/$target"
+    [ -d "$src" ] || die "$(msg "找不到快照 $target" "no snapshot named $target")"
+
+    # Snapshot the current state first, so a rollback can be rolled back.
+    local undo="$SNAP_ROOT/$(date +%Y%m%d-%H%M%S)-pre-rollback"
+    mkdir -p "$undo" && snapshot_paths "$undo"
+
+    while IFS=$'\t' read -r key f dst; do
+        [ -e "$src/$key" ] || continue
+        mkdir -p "$(dirname "$dst")"
+        cp -a "$src/$key" "$dst" 2>/dev/null || cp -p "$src/$key" "$dst"
+        say "  ~ $dst"
+    done < <(collect)
+    prune_snapshots
+    msg "已回滚到 $target（回滚前的状态存为 $(basename "$undo")）" \
+        "Rolled back to $target (previous state saved as $(basename "$undo"))"
+}
+
 case "${1:-install}" in
     install)   do_deploy ;;
     status)    do_status ;;
     uninstall) do_uninstall ;;
-    *)         die "$(msg "用法: $0 [install|status|uninstall]" "usage: $0 [install|status|uninstall]")" ;;
+    snapshot)  do_snapshot "${2:-}" ;;
+    snapshots) do_snapshots ;;
+    rollback)  do_rollback "${2:-1}" ;;
+    *)         die "$(msg "用法: $0 [install|status|uninstall|snapshot [备注]|snapshots|rollback [序号]]" \
+                    "usage: $0 [install|status|uninstall|snapshot [note]|snapshots|rollback [index]]")" ;;
 esac
