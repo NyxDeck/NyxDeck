@@ -1272,7 +1272,12 @@ def _plugin_has_bar_widget(plugin: str) -> bool:
         return True
     if "widget" in (data.get("components") or {}):
         return True
-    return "dankbar-widget" in (data.get("capabilities") or [])
+    if "dankbar-widget" in (data.get("capabilities") or []):
+        return True
+    # DMS falls back to "a manifest with a component and no type is a widget"
+    # (plugin.type || (manifest.components ? "composite" : "widget")), and
+    # first-party plugins such as dankKDEConnect rely on exactly that.
+    return not data.get("type") and bool(data.get("component"))
 
 
 def _bar_widgets(data: dict) -> list:
