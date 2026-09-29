@@ -324,12 +324,7 @@ def cmd_doctor(_: list[str]) -> int:
                "local dashboard not ready (nyxdeck mihomo dashboard)"))
 
     say("\n" + t("插件", "Plugins"))
-    for plugin in PLUGIN_REPOS:
-        if (PLUGIN_DIR / plugin).is_dir():
-            ok(plugin)
-        else:
-            warn(t(f"{plugin} 未安装  （nyxdeck plugin install {plugin}）",
-                   f"{plugin} not installed  (nyxdeck plugin install {plugin})"))
+    print_plugin_report()
     return 0
 
 
@@ -349,17 +344,39 @@ def cmd_deps(argv: list[str]) -> int:
     return subprocess.run(["sudo", "pacman", "-S", "--needed", *missing]).returncode
 
 
-def _install_repo_plugin(plugin: str, url: str) -> int:
-    target = PLUGIN_DIR / plugin
+def _install_repo_plugin(plugin: str, url: str, force: bool = False) -> int:
+    target = plugin_dir(plugin)
+    state = plugin_state(plugin)
+
+    if target.exists() and force:
+        say(t(f"删除并重新克隆 {plugin}", f"Removing and re-cloning {plugin}"))
+        shutil.rmtree(target)
+        state = plugin_state(plugin)
+
     if target.is_dir():
-        say(t(f"{plugin} 已安装（{target}）", f"{plugin} already installed ({target})"))
+        if not state["manifest_ok"]:
+            warn(t(f"{plugin} 目录在，但 plugin.json 无效，可能装坏了（--force 可重装）",
+                   f"{plugin} exists but plugin.json is invalid; reinstall with --force"))
+        elif not state["git_repo"]:
+            warn(t(f"{plugin} 已安装，但不是 git 仓库，无法用 git 更新（--force 可重装）",
+                   f"{plugin} is installed but not a git checkout, so git cannot update it (use --force)"))
+        else:
+            ok(t(f"{plugin} 已安装（{target}）", f"{plugin} already installed ({target})"))
+        if state["dms"] == "disabled":
+            dms("ipc", "call", "plugins", "enable", plugin)
+            dms_restart()
         return 0
+
     PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
     say(t(f"正在克隆 {url}", f"Cloning {url}"))
     rc = subprocess.run(["git", "clone", "--depth", "1", url, str(target)]).returncode
-    if rc == 0:
-        dms_restart()
-    return rc
+    if rc != 0:
+        err(t(f"{plugin} 克隆失败", f"failed to clone {plugin}"))
+        return rc
+    if not plugin_state(plugin)["manifest_ok"]:
+        warn(t(f"{plugin} 已克隆，但 plugin.json 无效", f"{plugin} cloned but its plugin.json is invalid"))
+    dms_restart()
+    return 0
 
 
 def cmd_plugin(argv: list[str]) -> int:
@@ -367,20 +384,33 @@ def cmd_plugin(argv: list[str]) -> int:
     rest = argv[1:]
 
     if action == "list":
-        if have("dms"):
-            dms("plugins", "list")
-        else:
-            err(t("未找到 dms", "dms not found"))
-            return 1
-        return 0
+        return print_plugin_report()
 
-    if action == "install":
+    if action in ("enable", "disable"):
         if not rest:
-            err(t("用法: nyxdeck plugin install <id>", "usage: nyxdeck plugin install <id>"))
+            err(t(f"用法: nyxdeck plugin {action} <id>", f"usage: nyxdeck plugin {action} <id>"))
             return 2
         plugin = rest[0]
+        if not plugin_state(plugin)["dir"]:
+            err(t(f"{plugin} 未安装", f"{plugin} is not installed"))
+            return 1
+        rc = dms("ipc", "call", "plugins", action, plugin).returncode
+        dms_restart()
+        if rc == 0:
+            ok(t(f"{plugin} 已{'启用' if action == 'enable' else '停用'}",
+                 f"{plugin} {'enabled' if action == 'enable' else 'disabled'}"))
+        return rc
+
+    if action == "install":
+        args = [a for a in rest if not a.startswith("-")]
+        force = "--force" in rest
+        if not args:
+            err(t("用法: nyxdeck plugin install <id> [--force]",
+                  "usage: nyxdeck plugin install <id> [--force]"))
+            return 2
+        plugin = args[0]
         if plugin in PLUGIN_REPOS:
-            return _install_repo_plugin(plugin, PLUGIN_REPOS[plugin])
+            return _install_repo_plugin(plugin, PLUGIN_REPOS[plugin], force)
         rc = dms("plugins", "install", plugin).returncode
         if rc == 0:
             dms("ipc", "call", "plugins", "enable", plugin)
@@ -391,9 +421,12 @@ def cmd_plugin(argv: list[str]) -> int:
         targets = rest or [p for p in PLUGIN_REPOS if (PLUGIN_DIR / p).is_dir()]
         rc = 0
         for plugin in targets:
-            target = PLUGIN_DIR / plugin
+            target = plugin_dir(plugin)
             if not target.is_dir():
                 warn(t(f"{plugin} 未安装", f"{plugin} not installed"))
+                continue
+            if not (target / ".git").is_dir():
+                warn(t(f"{plugin} 不是 git 仓库，跳过", f"{plugin} is not a git checkout, skipping"))
                 continue
             say(t(f"更新 {plugin}", f"Updating {plugin}"))
             rc |= subprocess.run(["git", "-C", str(target), "pull", "--ff-only"]).returncode
@@ -409,13 +442,14 @@ def cmd_visualizer(argv: list[str]) -> int:
     present = visualizer_enabled()
 
     if action == "status":
-        installed = (PLUGIN_DIR / VISUALIZER_PLUGIN).is_dir()
+        state = plugin_state(VISUALIZER_PLUGIN)
+        installed = state["dir"]
         say(t("插件：", "plugin:  ") + (t("已安装", "installed") if installed else t("未安装", "not installed")))
         say(t("组件：", "widget:  ") + (t("已启用", "enabled") if present else t("已禁用", "disabled")))
         return 0
 
     if action == "on":
-        if not (PLUGIN_DIR / VISUALIZER_PLUGIN).is_dir():
+        if not plugin_state(VISUALIZER_PLUGIN)["dir"]:
             say(t("先安装 NyxRings 插件。", "Installing the NyxRings plugin first."))
             rc = _install_repo_plugin(VISUALIZER_PLUGIN, PLUGIN_REPOS[VISUALIZER_PLUGIN])
             if rc != 0:
@@ -476,6 +510,138 @@ def cmd_lang(argv: list[str]) -> int:
         return 0
     say(t(f"当前语言：{'中文' if LANG == 'zh' else 'English'}",
           f"current language: {'Chinese' if LANG == 'zh' else 'English'}"))
+    return 0
+
+
+# ── Plugins: categories and detection ───────────────────────────────────────
+# Repository plugins are grouped by what they do, and "installed" means more
+# than "the directory exists": we check the manifest, the git checkout and what
+# DMS itself reports through `dms ipc call plugins status <id>`.
+
+PLUGIN_CATEGORY_ORDER = ["visual", "network", "other"]
+PLUGIN_CATEGORY_LABELS = {
+    "visual": ("视觉 / 桌面外观", "Visual / desktop look"),
+    "network": ("网络 / 代理", "Network / proxy"),
+    "other": ("内置 / 其它", "Built-in / other"),
+}
+PLUGIN_CATEGORY = {
+    "nyxRings": "visual",
+    "mihomoTun": "network",
+}
+PLUGIN_TAGS = {
+    "nyxRings": ("音频可视化，作为 DMS 桌面组件放到桌面上",
+                 "Audio visualizer, used as a DMS desktop widget"),
+    "mihomoTun": ("Mihomo TUN 代理：顶栏组件 + 本地控制面板",
+                  "Mihomo TUN proxy: bar widget plus a local control panel"),
+}
+
+
+def plugin_dir(plugin: str) -> Path:
+    return PLUGIN_DIR / plugin
+
+
+def plugin_category(plugin: str) -> str:
+    return PLUGIN_CATEGORY.get(plugin, "other")
+
+
+def _dms_plugin_status(plugin: str) -> str:
+    """loaded / disabled / unknown (not in the DMS registry) / nodms."""
+    if not have("dms"):
+        return "nodms"
+    out = _capture(["dms", "ipc", "call", "plugins", "status", plugin])
+    if out.startswith("PLUGIN_NOT_FOUND"):
+        return "unknown"
+    if out in ("Target not found.", ""):
+        # DMS stops answering for a plugin once it is disabled.
+        return "disabled"
+    return out
+
+
+def plugin_state(plugin: str) -> dict:
+    directory = plugin_dir(plugin)
+    state = {
+        "id": plugin,
+        "dir": directory.is_dir(),
+        "manifest": "",
+        "manifest_ok": False,
+        "git": "",
+        "git_repo": (directory / ".git").is_dir(),
+        "dms": _dms_plugin_status(plugin),
+    }
+    manifest = directory / "plugin.json"
+    if manifest.is_file():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        state["manifest"] = str(data.get("id") or "")
+        state["manifest_ok"] = state["manifest"] == plugin
+    if state["git_repo"] and have("git"):
+        state["git"] = _capture(["git", "-C", str(directory), "rev-parse", "--short", "HEAD"])
+    return state
+
+
+def plugin_known_ids() -> list[str]:
+    ids = set(PLUGIN_REPOS)
+    if PLUGIN_DIR.is_dir():
+        ids |= {entry.name for entry in PLUGIN_DIR.iterdir()
+                if entry.is_dir() and not entry.name.startswith(".")}
+    if have("dms"):
+        for line in _capture(["dms", "ipc", "call", "plugins", "list"]).splitlines():
+            if "[" in line:
+                ids.add(line.split("[")[0].strip())
+    return sorted(pid for pid in ids if pid)
+
+
+def _plugin_state_text(state: dict) -> tuple[str, str]:
+    """Return (level, text); level is one of ok / warn / err."""
+    if not state["dir"]:
+        return "warn", t("未安装", "not installed")
+    bits = [t("已安装", "installed")]
+    if state["dms"] == "loaded":
+        bits.append(t("已启用", "enabled"))
+    elif state["dms"] == "disabled":
+        bits.append(t("未启用", "disabled"))
+    else:
+        bits.append(t("DMS 未识别", "not in the DMS registry"))
+    if state["git"]:
+        bits.append(state["git"])
+    elif not state["git_repo"]:
+        bits.append(t("非 git 仓库，无法更新", "not a git checkout, cannot update"))
+    if not state["manifest_ok"]:
+        bits.append(t("plugin.json 无效", "invalid plugin.json"))
+    healthy = state["manifest_ok"] and state["dms"] == "loaded"
+    return ("ok" if healthy else "warn"), " · ".join(bits)
+
+
+def print_plugin_report() -> int:
+    states = {pid: plugin_state(pid) for pid in plugin_known_ids()}
+    if not states:
+        warn(t("没有找到任何插件", "no plugins found"))
+        return 0
+    for category in PLUGIN_CATEGORY_ORDER:
+        members = [pid for pid in states if plugin_category(pid) == category]
+        if not members:
+            continue
+        label = PLUGIN_CATEGORY_LABELS[category]
+        say("\n" + t(label[0], label[1]))
+        for pid in sorted(members):
+            state = states[pid]
+            level, text = _plugin_state_text(state)
+            line = f"{pid}  —  {text}"
+            if level == "ok":
+                ok(line)
+            elif level == "err":
+                err(line)
+            else:
+                warn(line)
+            tag = PLUGIN_TAGS.get(pid)
+            if tag:
+                say("      " + t(tag[0], tag[1]))
+            if not state["dir"] and pid in PLUGIN_REPOS:
+                say("      " + t(f"nyxdeck plugin install {pid}", f"nyxdeck plugin install {pid}"))
+            elif state["dir"] and state["dms"] == "disabled":
+                say("      " + t(f"nyxdeck plugin enable {pid}", f"nyxdeck plugin enable {pid}"))
     return 0
 
 
@@ -540,11 +706,6 @@ def _http_code_with_secret(url: str) -> str:
 
 def _dashboard_ok() -> bool:
     return _http_code(f"http://{MIHOMO_CONTROLLER}/ui/") == "200"
-
-
-def _plugin_loaded() -> bool:
-    out = _capture(["dms", "ipc", "call", "plugins", "list"])
-    return f"{MIHOMO_PLUGIN} [loaded]" in out or f"{MIHOMO_PLUGIN} [enabled]" in out
 
 
 def _enable_mihomo_plugin() -> None:
@@ -618,14 +779,11 @@ def cmd_mihomo(argv: list[str]) -> int:
         else:
             warn(t("本地面板未就绪", "local dashboard not ready")
                  + t(f"  （nyxdeck mihomo dashboard）", "  (nyxdeck mihomo dashboard)"))
-        if mihomo_dir().is_dir():
-            ok(t("插件已安装", "plugin installed") + f"  ({mihomo_dir()})")
-            if _plugin_loaded():
-                ok(t("插件已加载", "plugin loaded"))
-            else:
-                warn(t("插件未加载", "plugin not loaded"))
-        else:
-            warn(t("插件未安装（nyxdeck mihomo install）", "plugin not installed (nyxdeck mihomo install)"))
+        state = plugin_state(MIHOMO_PLUGIN)
+        level, text = _plugin_state_text(state)
+        (ok if level == "ok" else warn)(f"{MIHOMO_PLUGIN}  —  {text}")
+        if not state["dir"]:
+            say("      " + t("nyxdeck mihomo install", "nyxdeck mihomo install"))
         return 0
 
     if action in ("install", "repair"):
@@ -740,7 +898,7 @@ def main_menu() -> int:
             t("安装核心软件包", "Install core packages"),
             t("Mihomo TUN", "Mihomo TUN"),
             vis,
-            t("插件", "Plugins"),
+            t("插件（按分类）", "Plugins (by category)"),
             t("语言 / Language", "Language"),
             t("退出", "Exit"),
         ]
@@ -780,8 +938,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help=t("检查依赖、会话与插件", "check dependencies, the session, and plugins"))
     sub.add_parser("deps", help=t("安装核心软件包（pacman）；--check 只列出缺失",
                                  "install the core packages (pacman); --check lists what is missing"))
-    sub.add_parser("plugin", help=t("管理 DMS 插件：list | install <id> | update [id]",
-                                    "manage DMS plugins: list | install <id> | update [id]"))
+    sub.add_parser("plugin", help=t("管理 DMS 插件（按分类展示）：list | install <id> [--force] | enable <id> | disable <id> | update [id]",
+                                    "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
     sub.add_parser("visualizer", help=t("NyxRings 桌面组件：on | off | status",

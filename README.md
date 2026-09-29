@@ -86,8 +86,9 @@ nyxdeck uninstall        # remove deployed files (machine state is kept)
 nyxdeck doctor           # check dependencies, the session, and plugins
 nyxdeck deps [--check]   # install the core packages (cava, matugen, qt6ct, wtype)
 nyxdeck widget list      # desktop widgets
-nyxdeck plugin list
-nyxdeck plugin install <id>    # e.g. nyxRings, mihomoTun, cavaVisualizer, enderPulse
+nyxdeck plugin list            # grouped by category, with install/enable state
+nyxdeck plugin install <id> [--force]
+nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
 nyxdeck mihomo status          # core, service, controller, dashboard, plugin
@@ -103,6 +104,16 @@ nyxdeck mihomo uninstall [--purge]
 plugin manager, and the desktop-widget instances stored in
 `~/.config/DankMaterialShell/settings.json`. `nyxdeck visualizer on` installs
 the NyxRings plugin from its repository if needed, then adds a widget instance.
+
+### Plugins and categories
+
+`nyxdeck plugin list` (and `doctor`) group plugins by what they do — *visual /
+desktop look* (NyxRings), *network / proxy* (mihomoTun) and *built-in / other* —
+and report what is actually true rather than just whether a directory exists:
+the `plugin.json` manifest has to parse and name the plugin, the checkout has to
+be a git repository to be updatable, and DMS itself is asked through
+`dms ipc call plugins status <id>` whether the plugin is `loaded` or `disabled`.
+Reinstall a broken directory with `nyxdeck plugin install <id> --force`.
 
 ### Mihomo TUN pipeline
 
