@@ -1,0 +1,8 @@
+# Rendered by matugen on every theme change.
+#
+# Nothing consumes these values. The point of this template is the post_hook
+# declared next to it: programs that do not watch their own theme files are
+# nudged from there. Removing this template stops that reload.
+
+primary = "{{colors.primary.default.hex}}"
+surface = "{{colors.surface.default.hex}}"

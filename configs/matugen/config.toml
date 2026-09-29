@@ -21,3 +21,8 @@
 input_path = '/home/user/.config/matugen/templates/starship-palette.toml'
 output_path = '/home/user/.cache/nyxdeck/starship-palette.toml'
 post_hook = '/home/user/.config/matugen/splice-starship.sh'
+
+[templates.nyxdeck_reload]
+input_path = '/home/user/.config/matugen/templates/theme-stamp.toml'
+output_path = '/home/user/.cache/nyxdeck/theme-stamp.toml'
+post_hook = '/home/user/.config/matugen/reload-apps.sh'

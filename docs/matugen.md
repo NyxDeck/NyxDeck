@@ -3,7 +3,8 @@
 DMS generates color schemes for GTK, niri, fcitx5, kitty, qt6ct, and Firefox
 through matugen; `dms matugen check` lists the detected targets. This
 directory holds the templates that DMS does not provide but the desktop
-requires — currently starship.
+requires — currently starship, plus one hook that reloads programs which do not
+notice a theme change on their own.
 
 ## starship
 
@@ -11,6 +12,18 @@ starship has no include mechanism: its palette must be defined inside its
 single configuration file. DMS does not ship a starship template, so NyxDeck
 renders one and splices it into `~/.config/starship.toml` by way of a matugen
 post-hook.
+
+## Reloading running programs
+
+DMS re-renders every target when the wallpaper or the theme changes, but a
+program that is already running keeps the palette it read at startup. `kitty`
+reloads its configuration on `SIGUSR1` and `fcitx5` re-reads its theme only
+after a config reload, and nothing in DMS does either.
+
+`templates/theme-stamp.toml` exists to carry that hook: matugen has no global
+post-hook, so the reload is attached to a template that renders a small stamp
+(`~/.cache/nyxdeck/theme-stamp.toml`) purely so there is something to hang
+`reload-apps.sh` on. Deleting the template stops the reload.
 
 ## How DMS consumes user templates
 
