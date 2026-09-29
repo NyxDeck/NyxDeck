@@ -14,7 +14,7 @@ BACKUP_ROOT="$CONFIG_HOME/.nyxdeck-backup"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 # configs/<subdir> is deployed onto ~/.config/<subdir>.
-APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct")
+APPS=("DankMaterialShell" "matugen" "niri" "gtk-3.0" "gtk-4.0" "kitty" "qt6ct" "fastfetch" "fish")
 # configs/<file> is deployed onto ~/.config/<file>.
 FILES=("starship.toml")
 # Machine/user state: create if missing, but never overwrite an existing file.

@@ -916,6 +916,20 @@ def mihomo_menu() -> None:
         _press_any_key()
 
 
+FETCH_SCRIPT = REPO / "configs" / "fastfetch" / "fetch.py"
+
+
+def cmd_fetch(argv: list[str]) -> int:
+    """Terminal welcome panel; the script owns its own flags."""
+    script = FETCH_SCRIPT
+    if not script.is_file():
+        script = CONFIG_HOME / "fastfetch" / "fetch.py"
+    if not script.is_file():
+        err(t("找不到 fetch.py（先 nyxdeck install）", "fetch.py not found (run nyxdeck install)"))
+        return 1
+    return subprocess.run([sys.executable or "python3", str(script), *argv]).returncode
+
+
 # ── Interactive control panel ────────────────────────────────────────────────
 
 def main_menu() -> int:
@@ -928,11 +942,12 @@ def main_menu() -> int:
             t("Mihomo TUN", "Mihomo TUN"),
             vis,
             t("插件（按分类）", "Plugins (by category)"),
+            t("终端面板", "Terminal panel"),
             t("语言 / Language", "Language"),
             t("退出", "Exit"),
         ]
         choice = _menu(t("控制面板", "Control panel"), items)
-        if choice is None or choice == 7:
+        if choice is None or choice == 8:
             return 0
         clear_screen()
         if choice == 0:
@@ -949,6 +964,10 @@ def main_menu() -> int:
         elif choice == 5:
             cmd_plugin(["list"])
         elif choice == 6:
+            clear_screen()
+            show_logo()
+            cmd_fetch([])
+        elif choice == 7:
             select_language()
             continue
         _press_any_key()
@@ -971,6 +990,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
+    sub.add_parser("fetch", help=t("终端欢迎面板（配色跟随壁纸）：[--compact|--native|--install]",
+                                   "terminal welcome panel (colours follow the wallpaper): [--compact|--native|--install]"))
     sub.add_parser("visualizer", help=t("NyxRings 桌面组件：on | off | status",
                                         "NyxRings desktop widget: on | off | status"))
     sub.add_parser("widget", help=t("桌面组件：list", "desktop widgets: list"))
@@ -1003,6 +1024,8 @@ def main(argv: list[str]) -> int:
         return cmd_plugin(rest)
     if command == "mihomo":
         return cmd_mihomo(rest)
+    if command == "fetch":
+        return cmd_fetch(rest)
     if command == "visualizer":
         return cmd_visualizer(rest)
     if command == "widget":

@@ -91,6 +91,10 @@ nyxdeck plugin install <id> [--force]
 nyxdeck plugin enable <id> | disable <id>
 nyxdeck plugin update [id]     # git pull for repository plugins
 nyxdeck visualizer on|off|status   # the NyxRings desktop widget
+nyxdeck fetch                  # terminal welcome panel (colours follow the wallpaper)
+nyxdeck fetch --compact        # no mark
+nyxdeck fetch --native         # hand off to fastfetch with a generated config
+nyxdeck fetch --install        # write that config for a bare `fastfetch`
 nyxdeck mihomo status          # core, service, controller, dashboard, plugin
 nyxdeck mihomo install         # whole chain: core → config → dashboard → unit → plugin
 nyxdeck mihomo dashboard       # install / update the local dashboard at /ui/
@@ -114,6 +118,45 @@ the `plugin.json` manifest has to parse and name the plugin, the checkout has to
 be a git repository to be updatable, and DMS itself is asked through
 `dms ipc call plugins status <id>` whether the plugin is `loaded` or `disabled`.
 Reinstall a broken directory with `nyxdeck plugin install <id> --force`.
+
+### Terminal panel
+
+`nyxdeck fetch` replaces the ad-hoc fastfetch configuration that came before it. It draws a
+Material 3 Expressive panel — accent-coloured section labels, the
+distribution's own logo art, and a tonal swatch row — from the palette DMS
+generated for the current wallpaper, with `fastfetch --format json` supplying
+the machine data.
+Nothing is hard-coded, so the panel changes with the wallpaper like the bar,
+the terminal and starship do.
+
+A `rice  NyxDeck` row credits the desktop, the same slot NyxDeck used. Section
+labels carry no background block, which would read as a halo on a translucent
+terminal.
+
+The mark is fastfetch's built-in logo for the detected distribution (the same
+(official distro art, so it looks as deliberate as the distro's own), recoloured
+from the palette — fastfetch drops colour when stdout is a pipe, so it is
+captured through a pty and merged into the canvas. A hand-drawn crescent is
+used only when fastfetch is missing.
+
+The panel is English; `NYXDECK_LANG=zh` switches it. Terminal and shell are
+read from the process tree rather than from fastfetch, which would otherwise
+report the renderer's own `python3` process. `NO_COLOR` prints it plain, a
+terminal narrower than 64 columns drops the mark, and a missing palette falls
+back to a built-in dark M3 set.
+
+`install.sh` deploys it to `~/.config/fastfetch/fetch.py` and drops a
+`~/.config/fish/conf.d/nyxdeck-fetch.fish` hook so interactive shells show it
+(never in tmux/ssh nesting, never with `NYXDECK_NO_FETCH`, never without a
+terminal).
+
+A `fish_greeting` function defined by the distribution runs in addition to that
+hook — CachyOS ships one that calls bare `fastfetch`, which draws a second,
+unthemed panel. Remove it with `functions -e fish_greeting` (the hook, sourced
+from `conf.d`, runs before `config.fish` and cannot cancel a later definition,
+so NyxDeck taking over `~/.config/fish` is what would make this automatic). `--native` falls back to fastfetch itself with a generated config,
+and `--install` writes that config into `~/.config/fastfetch` (backing the old
+one up first) for anyone who runs bare `fastfetch`.
 
 ### Mihomo TUN pipeline
 
