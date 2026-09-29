@@ -58,6 +58,7 @@ PLUGIN_REPOS = {
 }
 
 VISUALIZER_PLUGIN = "nyxRings"
+WALLPAPER_PLUGIN = "nyxWallpaper"
 
 BANNER = r"""
 ███╗   ██╗██╗   ██╗██╗  ██╗██████╗ ███████╗ ██████╗██╗  ██╗
@@ -711,6 +712,70 @@ def _wallpaper_next(package, argv: list[str]) -> int:
                             [a for a in argv if a in ("--json", "--dry-run")])
 
 
+def _bar_widgets(data: dict) -> list:
+    """The bar section DMS keeps plugin widgets in (right by default)."""
+    configs = data.get("barConfigs")
+    if not isinstance(configs, list) or not configs:
+        return []
+    widgets = configs[0].get("rightWidgets")
+    if not isinstance(widgets, list):
+        widgets = []
+        configs[0]["rightWidgets"] = widgets
+    return widgets
+
+
+def _bar_widget_present(data: dict, plugin_id: str) -> bool:
+    return any(isinstance(w, dict) and w.get("id") == plugin_id for w in _bar_widgets(data))
+
+
+def cmd_wallpaper_panel(argv: list[str]) -> int:
+    """Put the wallpaper panel in the bar, or take it out again."""
+    action = argv[0] if argv else "status"
+    data = load_settings()
+    present = _bar_widget_present(data, WALLPAPER_PLUGIN)
+
+    if action == "status":
+        installed = plugin_state(WALLPAPER_PLUGIN)["dir"]
+        say(t("插件：", "plugin: ") + (t("已安装", "installed") if installed
+                                      else t("未安装", "not installed")))
+        say(t("顶栏组件：", "bar widget: ") + (t("已添加", "added") if present
+                                              else t("未添加", "not added")))
+        return 0
+
+    if action == "on":
+        if present:
+            ok(t("顶栏里已经有壁纸组件了", "the wallpaper widget is already in the bar"))
+            return 0
+        if not plugin_state(WALLPAPER_PLUGIN)["dir"]:
+            say(t("先安装 nyxWallpaper 插件。", "Installing the nyxWallpaper plugin first."))
+            rc = _install_repo_plugin(WALLPAPER_PLUGIN, PLUGIN_REPOS[WALLPAPER_PLUGIN])
+            if rc != 0:
+                return rc
+        _bar_widgets(data).append({"id": WALLPAPER_PLUGIN, "enabled": True})
+        save_settings(data)
+        dms_restart()
+        ok(t("壁纸面板已加入顶栏（右侧，图标是 photo_library）",
+             "wallpaper panel added to the bar (right side, photo_library icon)"))
+        return 0
+
+    if action == "off":
+        if not present:
+            ok(t("顶栏里本来就没有壁纸组件", "the wallpaper widget was not in the bar"))
+            return 0
+        configs = data.get("barConfigs") or []
+        if configs:
+            configs[0]["rightWidgets"] = [
+                w for w in _bar_widgets(data)
+                if not (isinstance(w, dict) and w.get("id") == WALLPAPER_PLUGIN)]
+        save_settings(data)
+        dms_restart()
+        ok(t("已从顶栏移除壁纸组件", "wallpaper widget removed from the bar"))
+        return 0
+
+    err(t(f"未知操作：{action}（status | on | off）", f"unknown action: {action} (status | on | off)"))
+    return 2
+
+
 def _wallpaper_thumb(package, argv: list[str]) -> int:
     """Generate one thumbnail on demand and print its path — what a UI needs."""
     backend, wallpaper_config, scanner = package
@@ -772,6 +837,8 @@ def cmd_wallpaper(argv: list[str]) -> int:
 
     if action == "cache":
         return _wallpaper_cache(argv[1:])
+    if action == "panel":
+        return cmd_wallpaper_panel(argv[1:])
 
     package = _wallpaper_package()
     if package is None:
@@ -2519,7 +2586,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "manage DMS plugins (grouped by category): list | install <id> [--force] | enable <id> | disable <id> | update [id]"))
     sub.add_parser("mihomo", help=t("Mihomo TUN 链路：status | install | dashboard | plugin | secret | on | off | uninstall",
                                     "Mihomo TUN pipeline: status | install | dashboard | plugin | secret | on | off | uninstall"))
-    sub.add_parser("wallpaper", help=t("壁纸与资源：status | list [--json] | sources [add|remove] | download [名字] | set <文件|序号> | next | cache",
+    sub.add_parser("wallpaper", help=t("壁纸与资源：status | list [--json] | sources [add|remove] | download [名字] | set <文件|序号> | next | panel on|off | cache",
         "wallpapers and resources: status | list [--json] | sources [add|remove] | download [name] | set <file|index> | next | cache"))
     sub.add_parser("setup", help=t("一键安装全套链路：依赖 → 配置 → 插件 → Mihomo（--dry-run/--no-mihomo/--no-plugins/--no-deps）",
                                     "one-shot setup: deps → configuration → plugins → Mihomo (--dry-run/--no-mihomo/--no-plugins/--no-deps)"))
