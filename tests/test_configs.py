@@ -145,16 +145,47 @@ def test_every_shipped_config_is_read_by_something(app):
     )
 
 
-def test_every_include_resolves_to_a_shipped_or_generated_file():
+def dangling_includes(root: pathlib.Path, generated: set[str]) -> list[str]:
+    """Includes under `root` that neither the repository ships nor anything creates.
+
+    An absolute path is a system file: this repository cannot ship one, and
+    whether it is present is the reading program's business — configs/fish/conf
+    .fish guards its CachyOS include with `test -f`. Judging those by the running
+    machine is what made an earlier version of this test green on CachyOS and red
+    in CI's Arch container.
+    """
     dangling = []
-    for relative, path in shipped():
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        relative = path.relative_to(root).as_posix()
         for target in includes_of(path):
-            joined = pathlib.PurePosixPath(relative).parent / target
-            normalised = str(pathlib.PurePosixPath(joined))
-            if (CONFIGS / normalised).is_file() or normalised in GENERATED:
+            if target.startswith("/"):
+                continue
+            normalised = str(pathlib.PurePosixPath(relative).parent / target)
+            if (root / normalised).is_file() or normalised in generated:
                 continue
             dangling.append(f"{relative} -> {target}")
+    return dangling
+
+
+def test_every_include_resolves_to_a_shipped_or_generated_file():
+    dangling = dangling_includes(CONFIGS, GENERATED)
     assert not dangling, "a shipped config includes a file nothing creates: " + "; ".join(dangling)
+
+
+def test_an_include_is_not_judged_by_the_machine_it_runs_on(tmp_path):
+    """The absolute-path rule, as a behaviour rather than a comment."""
+    (tmp_path / "configs" / "fish").mkdir(parents=True)
+    (tmp_path / "configs" / "fish" / "config.fish").write_text(
+        "source /definitely/not/on/this/machine.fish\n", encoding="utf-8")
+    assert dangling_includes(tmp_path / "configs", set()) == []
+
+    # …while a relative include that nothing ships is still reported.
+    (tmp_path / "configs" / "fish" / "config.fish").write_text(
+        "source ../nowhere.fish\n", encoding="utf-8")
+    assert dangling_includes(tmp_path / "configs", set()) == [
+        "fish/config.fish -> ../nowhere.fish"]
 
 
 def test_every_preserved_path_is_seeded_or_self_created():
