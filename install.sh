@@ -67,6 +67,11 @@ PLACEHOLDER_SED=(-e "s|/home/user|$(sed_replacement "$HOME")|g"
                  -e "s|@PICTURES@|$(sed_replacement "$PICTURES_DIR")|g")
 
 say()  { printf '%s\n' "$*"; }
+# Warnings carry the marker nyxdeck uses and go to stderr, so a deploy whose
+# stdout is captured still shows them. Five call sites already relied on this
+# function existing; it did not, and under `set -e` the shell's own "command not
+# found" replaced the message and aborted the deploy with it.
+warn() { printf '! %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # Bilingual output. NYXDECK_LANG overrides the locale; otherwise Chinese when
