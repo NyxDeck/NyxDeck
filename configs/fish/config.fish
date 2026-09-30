@@ -2,6 +2,15 @@ if test -f /usr/share/cachyos-fish-config/cachyos-config.fish
     source /usr/share/cachyos-fish-config/cachyos-config.fish
 end
 
+# ── 语法高亮 / Syntax highlighting ──────────────────────────────────────────
+# fish 的自动补全 ghost 文字默认是一个写死的 #555555，不跟随终端调色板；对
+# 本桌面的背景色只有 2.5:1，套上 kitty 的半透明背景后还会掉到 1.5:1，基本看
+# 不见。palette 也给不出可用的暗色槽位 —— DMS 生成的 color8 是 #41433a，对它
+# 自己的背景只有 1.85:1（详见 configs/kitty/kitty.conf 里的说明）。所以这两个
+# 槽位在这里显式钉住：够暗，能看出是"提示"而不是"已输入"，但读得清。
+set -g fish_color_autosuggestion 8f9086
+set -g fish_color_comment 8f9086
+
 # 代理配置 (Proxy Configuration) — 修改此处以适配你的代理端口
 set -g PROXY_ADDR "127.0.0.1:7890"
 
