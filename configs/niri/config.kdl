@@ -50,7 +50,9 @@ hotkey-overlay {
 }
 
 prefer-no-csd
-screenshot-path "~/图片/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
+// @PICTURES@ is the XDG pictures directory, expanded by install.sh: the name
+// is locale-dependent (~/Pictures, ~/图片, ~/Bilder, …) and niri cannot ask.
+screenshot-path "@PICTURES@/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 
 debug {
     honor-xdg-activation-with-invalid-serial

@@ -41,6 +41,31 @@ PRESERVE=(
     "kitty/__custom__.conf"
 )
 
+# Values a shipped config cannot know, written as placeholders it can carry:
+# /home/user for the home directory, and @PICTURES@ for the XDG pictures
+# directory — which is locale-dependent (~/Pictures, ~/图片, ~/Bilder, …), so a
+# hard-coded name there would file a screenshot somewhere the user never looks.
+xdg_pictures_dir() {
+    local dir=""
+    if command -v xdg-user-dir >/dev/null 2>&1; then
+        dir="$(xdg-user-dir PICTURES 2>/dev/null || true)"
+    fi
+    # xdg-user-dir answers $HOME when the directory is not configured.
+    if [ -z "$dir" ] || [ "$dir" = "$HOME" ]; then
+        dir="$HOME/Pictures"
+    fi
+    printf '%s' "$dir"
+}
+
+# sed replacement text is not literal: & means the whole match, \ escapes the
+# next character, and the delimiter would close the expression. Escape the values
+# rather than trusting that $HOME contains none of them.
+sed_replacement() { printf '%s' "$1" | sed -e 's/[&\\|]/\\&/g'; }
+
+PICTURES_DIR="$(xdg_pictures_dir)"
+PLACEHOLDER_SED=(-e "s|/home/user|$(sed_replacement "$HOME")|g"
+                 -e "s|@PICTURES@|$(sed_replacement "$PICTURES_DIR")|g")
+
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
@@ -133,7 +158,7 @@ desired_content() {
     if [ "$key" = "starship.toml" ]; then
         starship_wanted
     else
-        sed "s|/home/user|$HOME|g" "$f"
+        sed "${PLACEHOLDER_SED[@]}" "$f"
     fi
 }
 
@@ -205,9 +230,9 @@ do_deploy() {
         # by the file itself, instead of writing through the link.
         cp --remove-destination -p "$f" "$dst"
         # DMS only substitutes SHELL_DIR/CONFIG_DIR in its own templates; the
-        # user's [templates.*] section is appended verbatim and niri configs
-        # use /home/user placeholders, so we expand them ourselves.
-        sed -i "s|/home/user|$HOME|g" "$dst" 2>/dev/null || true
+        # user's [templates.*] section is appended verbatim, and our configs
+        # carry the placeholders above, so we expand them ourselves.
+        sed -i "${PLACEHOLDER_SED[@]}" "$dst" 2>/dev/null || true
     done < <(collect)
 
     # EyeCare runtime symlink (self-healing script also recreates it, but niri
