@@ -36,6 +36,9 @@ PRESERVE=(
     # fisher's state: which plugins are wanted, and fish's universal variables.
     "fish/fish_plugins"
     "fish/fish_variables"
+    # The user's terminal tweaks: kitty.conf includes it, and the rest of
+    # kitty.conf is ours and does get refreshed.
+    "kitty/__custom__.conf"
 )
 
 say()  { printf '%s\n' "$*"; }

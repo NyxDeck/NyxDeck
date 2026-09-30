@@ -50,7 +50,9 @@ configs/
     splice-starship.sh   post-hook that splices the palette into starship.toml
   gtk-3.0/               → ~/.config/gtk-3.0/     (imports dank-colors.css)
   gtk-4.0/               → ~/.config/gtk-4.0/     (imports dank-colors.css)
-  kitty/                 → ~/.config/kitty/       (includes dank-theme.conf)
+  kitty/                 → ~/.config/kitty/       (kitty.conf pulls in
+                                                  current-theme.conf and
+                                                  dank-tabs.conf)
   qt6ct/                 → ~/.config/qt6ct/       (selects the matugen scheme)
   starship.toml          → ~/.config/starship.toml
 themes/                  custom DMS theme JSON files
