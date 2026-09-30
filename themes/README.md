@@ -6,9 +6,11 @@ DMS 的自定义主题 JSON：在设置面板 **Theme & Colors → Custom** 里�
 ```json
 {
   "currentThemeName": "custom",
-  "customThemeFile": "/home/youxi/NyxDeck/themes/xxx.json"
+  "customThemeFile": "/home/<you>/NyxDeck/themes/xxx.json"
 }
 ```
+
+`customThemeFile` 必须是绝对路径（DMS 不展开 `~`）。
 
 配色字段（`primary` / `surface` / `surfaceContainer` / `error` 等）见
 `/usr/share/doc/dms-shell/CUSTOM_THEMES.md`。机器上还自带一批可直接用的：
