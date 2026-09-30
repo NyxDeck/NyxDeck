@@ -948,7 +948,11 @@ def _verify_plugins() -> list[tuple[str, str, str]]:
             level = "warn"
             details.append(t("DMS 未识别", "not in the DMS registry"))
         git = _git_state(entry)
-        if not git:
+        if not git and entry.with_suffix(".meta").is_file():
+            # Installed by DMS' own plugin manager (first-party plugins ship as
+            # a bundle next to a .meta file), so there is nothing to pull.
+            details.append(t("由 DMS 管理", "managed by DMS"))
+        elif not git:
             level = "fail" if level == "fail" else "warn"
             details.append(t("非 git 仓库，无法更新", "not a git checkout, cannot update"))
         else:
