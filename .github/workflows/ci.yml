@@ -15,7 +15,10 @@ jobs:
         run: |
           pacman-key --init
           pacman-key --populate archlinux
-          pacman -Sy --noconfirm python python-pytest python-gobject
+          # git and gdk-pixbuf2 are not "extra": the suite builds a real git
+          # repository and imports the wallpaper picker, which needs the
+          # GdkPixbuf namespace; both are CORE_DEPS of the desktop itself.
+          pacman -Sy --noconfirm python python-pytest python-gobject git gdk-pixbuf2
       - name: Python syntax
         run: |
           python -m py_compile nyxdeck
