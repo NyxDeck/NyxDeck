@@ -318,6 +318,19 @@ do_deploy() {
         fi
     fi
 
+    # A deploy on a machine that is missing the session's own commands succeeds
+    # and then hands the user a login that cannot come up. `nyxdeck deps` already
+    # owns the list of what those are, so ask it instead of keeping a second one.
+    local deps_out=""
+    if [ -x "$HOME/.local/bin/nyxdeck" ] && command -v python3 >/dev/null 2>&1 \
+            && ! deps_out="$(NO_COLOR=1 "$HOME/.local/bin/nyxdeck" deps --check 2>&1)"; then
+        warn "$(msg "依赖不完整：登录后会话起不来，请先装好下面的包。" \
+                "dependencies incomplete: the session will not start; install these first.")"
+        printf '%s\n' "$deps_out" | sed 's/^/      /'
+        say "$(msg "      安装：nyxdeck deps（或 nyxdeck deps --pick 逐项挑）" \
+                "      install with: nyxdeck deps (or --pick to choose)")"
+    fi
+
     msg "完成。改动前的旧文件备份在 $BACKUP_ROOT/$STAMP/" \
         "Done. Previous files backed up to $BACKUP_ROOT/$STAMP/"
 }
