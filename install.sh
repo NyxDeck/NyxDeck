@@ -264,8 +264,15 @@ do_deploy() {
                 say "  ~ fisher 插件不全，运行 fisher update" "  ~ fisher plugins incomplete, running fisher update"
                 fish -c 'fisher update' 2>&1 | sed 's/^/      /' || warn "$(msg "fisher update 失败（离线？）" "fisher update failed (offline?)")"
             else
-                warn "$(msg "缺少 fisher 插件但没装 fisher（fish 里跑 fisher install jorgebucaran/fisher）" \
-                        "fisher plugins are declared but fisher is not installed")"
+                # fish_plugins names fisher itself, so this is the first run on a
+                # machine that has never had it: `fisher install` cannot work
+                # before fisher exists, and the bootstrap is the documented one.
+                warn "$(msg "声明了 fisher 插件，但这台机器上还没有 fisher。先在 fish 里引导它：
+        curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source && fisher install jorgebucaran/fisher
+      然后重跑本脚本，其余插件会自动补齐。" \
+                        "fisher plugins are declared, but this machine has no fisher yet. Bootstrap it in fish:
+        curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source && fisher install jorgebucaran/fisher
+      then re-run this script and the rest are installed.")"
             fi
         fi
     fi
