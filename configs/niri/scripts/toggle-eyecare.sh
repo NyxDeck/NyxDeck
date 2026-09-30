@@ -119,8 +119,13 @@ if [ "$IS_TURNING_ON" = "true" ]; then
 fi
 
 # 4. Visual Notification
-if [ "$IS_TURNING_ON" = "true" ]; then
-    notify-send -t 2000 "Eye Care : On"
-else
-    notify-send -t 2000 "Eye Care : Off"
+# notify-send lives in libnotify, which is not one of the desktop's dependencies
+# (DMS draws its own notifications), so say nothing rather than spraying
+# "command not found" into the journal on every toggle.
+if command -v notify-send >/dev/null 2>&1; then
+    if [ "$IS_TURNING_ON" = "true" ]; then
+        notify-send -t 2000 "Eye Care : On"
+    else
+        notify-send -t 2000 "Eye Care : Off"
+    fi
 fi
