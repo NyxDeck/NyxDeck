@@ -324,6 +324,12 @@ Wallpapers live where the picker already looks — `~/图片/Wallpapers` and
 The directory layout *is* the second level of the categories the panel shows:
 `All` / `Static` / `Live` on top, the subfolders underneath.
 
+Live wallpapers are never auto-paused. `--auto-pause` has mpvpaper stop the video
+whenever the layer counts as hidden, and under niri every window spans the full
+output height — two columns already count as covered, so the video sat frozen on
+its first frame whatever was picked. `NYXDECK_MPVPAPER_AUTOPAUSE=1` brings the
+old pause-when-hidden behaviour back.
+
 Nothing is downloaded until you ask. The shipped source list
 (`configs/nyxdeck/wallpaper-sources.json`, copied once and then preserved) names
 one community collection plus a mirror for networks that need it; it declares no

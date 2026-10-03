@@ -84,8 +84,14 @@ def apply_dynamic_wallpaper(video_path: str, thumb_path: str = None) -> bool:
             _remember_live_frame(thumb_path)
             _set_dms_wallpaper(thumb_path)
 
+        # --auto-pause is deliberately NOT passed. Under niri every window spans
+        # the full output height, so two columns already cover the output and
+        # mpvpaper's "wallpaper is hidden" check fires almost always, leaving the
+        # video frozen on a single frame (--auto-mode FULL does not help either).
+        # Export NYXDECK_MPVPAPER_AUTOPAUSE=1 to restore the old behaviour.
+        auto_pause = ["--auto-pause"] if os.environ.get("NYXDECK_MPVPAPER_AUTOPAUSE") == "1" else []
         mpv_opts = "config=no load-scripts=no loop-file=inf panscan=1.0 no-audio hwdec=auto"
-        cmd = ["mpvpaper", "--auto-pause", "-o", mpv_opts, "*", video_path]
+        cmd = ["mpvpaper", *auto_pause, "-o", mpv_opts, "*", video_path]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception as e:
