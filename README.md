@@ -316,6 +316,7 @@ nyxdeck wallpaper sources         # list | add <name> <url> [--mirror <url>] | r
 nyxdeck wallpaper download        # fetch a source; nothing is downloaded by default
 nyxdeck wallpaper set <file|#>    # static through DMS, video through mpvpaper
 nyxdeck wallpaper next            # a random one (--static / --video)
+nyxdeck wallpaper restore         # put the last live wallpaper back (login, theme churn)
 nyxdeck wallpaper cache --clean   # drop the thumbnail cache
 ```
 
@@ -329,6 +330,12 @@ whenever the layer counts as hidden, and under niri every window spans the full
 output height — two columns already count as covered, so the video sat frozen on
 its first frame whatever was picked. `NYXDECK_MPVPAPER_AUTOPAUSE=1` brings the
 old pause-when-hidden behaviour back.
+
+`restore` is the other half of that: the picker remembers the live wallpaper it
+last set, and `nyxdeck wallpaper restore` — run at login and from the matugen
+hook — raises it again after DMS re-renders from its own stored wallpaper.
+Setting a still in the picker clears the record, which is what makes an explicit
+static wallpaper stick.
 
 Nothing is downloaded until you ask. The shipped source list
 (`configs/nyxdeck/wallpaper-sources.json`, copied once and then preserved) names

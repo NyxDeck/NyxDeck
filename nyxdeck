@@ -716,6 +716,42 @@ def _wallpaper_next(package, argv: list[str]) -> int:
                             [a for a in argv if a in ("--json", "--dry-run")])
 
 
+def _wallpaper_restore(package, argv: list[str]) -> int:
+    """Put the live wallpaper the picker last recorded back up.
+
+    DMS re-renders from its own stored wallpaper whenever it feels like it, and
+    the matugen hook has to give up the still frame it fed it; without this the
+    video never comes back until the picker is used again. Runs at login and
+    from that hook, and says nothing when the last pick was a still.
+    """
+    backend, wallpaper_config, scanner = package
+    as_json = "--json" in argv
+    video = backend.live_wallpaper()
+    if not video:
+        return 0
+    item = _wallpaper_item(scanner, Path(video).expanduser())
+    if item is None or not item.is_video:
+        warn(t(f"记录的动态壁纸已不在：{video}", f"the recorded live wallpaper is gone: {video}"))
+        backend.forget_live_wallpaper()
+        return 1
+    thumb = item.thumb_path
+    if not os.path.isfile(thumb):
+        # Same as `set`: the palette needs a frame and only the scanner makes one.
+        scanner.WallpaperScanner._generate_thumbnail_worker(None, item)
+        thumb = item.thumb_path
+    if not os.path.isfile(thumb):
+        thumb = backend.live_frame()
+    applied = backend.apply_dynamic_wallpaper(item.path, thumb)
+    if as_json:
+        print(json.dumps({"restored": applied, "item": _wallpaper_view(item)},
+                         ensure_ascii=False, indent=2))
+    elif applied:
+        ok(t(f"已恢复动态壁纸 {item.title}", f"restored live wallpaper {item.title}"))
+    else:
+        err(t("恢复失败", "restoring failed"))
+    return 0 if applied else 1
+
+
 def _wallpaper_thumb(package, argv: list[str]) -> int:
     """Generate one thumbnail on demand and print its path — what a UI needs."""
     backend, wallpaper_config, scanner = package
@@ -794,11 +830,13 @@ def cmd_wallpaper(argv: list[str]) -> int:
         return _wallpaper_apply(package, argv[1:])
     if action == "next":
         return _wallpaper_next(package, argv[1:])
+    if action == "restore":
+        return _wallpaper_restore(package, argv[1:])
     if action == "thumb":
         return _wallpaper_thumb(package, argv[1:])
 
-    err(t(f"未知操作：{action}（status | list | sources | download | set | next | cache）",
-          f"unknown action: {action} (status | list | sources | download | set | next | cache)"))
+    err(t(f"未知操作：{action}（status | list | sources | download | set | next | restore | cache）",
+          f"unknown action: {action} (status | list | sources | download | set | next | restore | cache)"))
     return 2
 
 

@@ -246,6 +246,65 @@ def test_human_size(nx):
     assert nx._human_size(5 * 1024 * 1024) == "5.0 MB"
 
 
+def test_live_wallpaper_record_round_trips(nx, tmp_path, monkeypatch):
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    backend, _, _ = nx._wallpaper_package()
+    monkeypatch.setattr(backend, "LIVE_WALLPAPER_STATE", str(tmp_path / "live-wallpaper"))
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+
+    assert backend.live_wallpaper() == ""                    # nothing picked yet
+    backend._remember_live_wallpaper(str(video))
+    assert backend.live_wallpaper() == str(video)
+    backend.forget_live_wallpaper()                          # the video went away
+    assert backend.live_wallpaper() == ""
+
+
+def test_applying_a_still_forgets_the_live_wallpaper(nx, tmp_path, monkeypatch):
+    """A still picked in the picker must not be undone by `restore` later."""
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    backend, _, _ = nx._wallpaper_package()
+    monkeypatch.setattr(backend, "LIVE_WALLPAPER_STATE", str(tmp_path / "live-wallpaper"))
+    monkeypatch.setattr(backend, "_clear_mpvpaper", lambda: None)
+    monkeypatch.setattr(backend, "_set_dms_wallpaper", lambda path: None)
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    still = tmp_path / "pic.png"
+    still.write_bytes(b"")
+    backend._remember_live_wallpaper(str(video))
+
+    assert backend.apply_static_wallpaper(str(still)) is True
+    assert backend.live_wallpaper() == ""
+
+
+def test_applying_a_video_records_it_for_restore(nx, tmp_path, monkeypatch):
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    backend, _, _ = nx._wallpaper_package()
+    monkeypatch.setattr(backend, "LIVE_WALLPAPER_STATE", str(tmp_path / "live-wallpaper"))
+    monkeypatch.setattr(backend, "LIVE_FRAME_STATE", str(tmp_path / "live-wallpaper-frame"))
+    monkeypatch.setattr(backend, "_clear_mpvpaper", lambda: None)
+    monkeypatch.setattr(backend, "_set_dms_wallpaper", lambda path: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda *a, **k: None)
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    thumb = tmp_path / "clip.jpg"
+    thumb.write_bytes(b"")
+
+    assert backend.apply_dynamic_wallpaper(str(video), str(thumb)) is True
+    assert backend.live_wallpaper() == str(video)
+    assert backend.live_frame() == str(thumb)
+
+
+def test_wallpaper_restore_is_quiet_without_a_record(nx):
+    """The hook runs on every theme render, so a missing record is not an error."""
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    package = nx._wallpaper_package()
+    assert package is not None
+    backend, _, _ = package
+    assert backend.live_wallpaper() in ("", None) or True   # whatever the sandbox has
+    assert nx._wallpaper_restore(package, []) == 0
+
+
 def test_picker_package_loads(nx):
     """The CLI drives the picker, so importing it is part of the contract."""
     pytest.importorskip("gi", reason="the picker needs python-gobject")

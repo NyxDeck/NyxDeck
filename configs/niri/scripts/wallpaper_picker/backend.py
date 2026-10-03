@@ -15,18 +15,56 @@ import time
 # set from one DMS' own picker or cycler set.
 LIVE_FRAME_STATE = os.path.expanduser("~/.cache/nyxdeck/live-wallpaper-frame")
 
+# The video behind that frame, kept separately because it outlives it: a theme
+# change can drop the frame record (the palette has to come from a picture that
+# is actually visible), while what to restore on the next login is unchanged.
+LIVE_WALLPAPER_STATE = os.path.expanduser("~/.cache/nyxdeck/live-wallpaper")
+
+
+def _write_marker(path: str, value: str):
+    """Write a one-line state file, or delete it when the value is empty."""
+    try:
+        if value:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(value)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def _read_marker(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
 
 def _remember_live_frame(thumb_path: str):
     """Record the frame DMS is showing, or forget it when a still is applied."""
-    try:
-        os.makedirs(os.path.dirname(LIVE_FRAME_STATE), exist_ok=True)
-        if thumb_path:
-            with open(LIVE_FRAME_STATE, "w", encoding="utf-8") as handle:
-                handle.write(thumb_path)
-        elif os.path.exists(LIVE_FRAME_STATE):
-            os.remove(LIVE_FRAME_STATE)
-    except OSError:
-        pass
+    _write_marker(LIVE_FRAME_STATE, thumb_path or "")
+
+
+def _remember_live_wallpaper(video_path: str):
+    """Record the video to restore, or forget it when a still is applied."""
+    _write_marker(LIVE_WALLPAPER_STATE, video_path or "")
+
+
+def live_frame() -> str:
+    """The still frame DMS was last told to show, or "" when a still is set."""
+    return _read_marker(LIVE_FRAME_STATE)
+
+
+def live_wallpaper() -> str:
+    """The live wallpaper to restore at login, or "" when a still is set."""
+    return _read_marker(LIVE_WALLPAPER_STATE)
+
+
+def forget_live_wallpaper():
+    """Drop the restore record, for a video that is no longer on disk."""
+    _remember_live_wallpaper("")
 
 
 def _clear_mpvpaper():
@@ -66,6 +104,7 @@ def apply_static_wallpaper(path: str) -> bool:
     try:
         _clear_mpvpaper()
         _remember_live_frame("")
+        _remember_live_wallpaper("")
         _set_dms_wallpaper(path)
         return True
     except Exception as e:
@@ -77,6 +116,7 @@ def apply_dynamic_wallpaper(video_path: str, thumb_path: str = None) -> bool:
     """Apply a video wallpaper via mpvpaper, seeding the DMS theme from its thumbnail."""
     try:
         _clear_mpvpaper()
+        _remember_live_wallpaper(video_path)
 
         # A video frame cannot be color-extracted directly; feed DMS the
         # thumbnail so the Material You theme still tracks the wallpaper.

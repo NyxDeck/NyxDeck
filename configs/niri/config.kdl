@@ -45,6 +45,10 @@ spawn-at-startup "~/.config/DankMaterialShell/start.sh"
 spawn-at-startup "sh" "-c" "command -v fcitx5 >/dev/null 2>&1 && exec fcitx5 -d"
 spawn-at-startup "~/.config/niri/scripts/toggle-eyecare.sh" "--sync"
 
+// DMS renders from its own stored wallpaper, so a live wallpaper picked earlier
+// has to be raised again once the shell is actually there.
+spawn-at-startup "sh" "-c" "sleep 5; exec \"$HOME/.local/bin/nyxdeck\" wallpaper restore"
+
 hotkey-overlay {
     skip-at-startup
 }
