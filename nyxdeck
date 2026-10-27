@@ -678,6 +678,9 @@ def _wallpaper_apply(package, argv: list[str]) -> int:
     if item is None:
         err(t(f"找不到壁纸：{wanted}", f"no such wallpaper: {wanted}"))
         return 1
+    # Carousel scans NyxDeck's thumbnails; resolve one back to its source file.
+    item = next((candidate for candidate in items
+                 if item.path == os.path.realpath(candidate.thumb_path)), item)
     view = _wallpaper_view(item)
     if dry_run:
         if as_json:

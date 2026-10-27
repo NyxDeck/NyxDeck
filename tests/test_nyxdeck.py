@@ -318,3 +318,31 @@ def test_picker_package_loads(nx):
     assert scanner.WallpaperItem("/tmp/example.mp4").is_video
     assert not scanner.WallpaperItem("/tmp/example.webp").is_video
     assert scanner.WallpaperItem("/tmp/my_file-1.png").title == "my file 1"
+
+
+def test_wallpaper_set_resolves_a_cached_thumbnail(nx, tmp_path, monkeypatch):
+    pytest.importorskip("gi", reason="the picker needs python-gobject")
+    backend, wallpaper_config, scanner = nx._wallpaper_package()
+    video = tmp_path / "clip.mp4"
+    thumbnail = tmp_path / "thumb.jpg"
+    video.write_bytes(b"")
+    thumbnail.write_bytes(b"")
+    source = scanner.WallpaperItem(str(video))
+    source.thumb_path = str(thumbnail)
+
+    class FakeWallpaperScanner:
+        def __init__(self):
+            self.items = [source]
+
+        def scan(self):
+            return self.items
+
+    class FakeScanner:
+        WallpaperItem = scanner.WallpaperItem
+        WallpaperScanner = FakeWallpaperScanner
+
+    picked = []
+    monkeypatch.setattr(backend, "apply_wallpaper", lambda item: picked.append(item) or True)
+
+    assert nx._wallpaper_apply((backend, wallpaper_config, FakeScanner()), [str(thumbnail)]) == 0
+    assert picked == [source]
