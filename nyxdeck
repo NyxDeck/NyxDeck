@@ -2031,6 +2031,20 @@ def logo_description(value: str) -> str:
     return t(f"内置 {value}", f"built-in {value}")
 
 
+def pick_logo_file() -> str:
+    """A graphical file chooser, or "" when cancelled or none is installed."""
+    if have("zenity"):
+        cmd = ["zenity", "--file-selection",
+               "--title", t("选择 ASCII Logo 文件", "Choose an ASCII logo file"),
+               "--file-filter", "ASCII | *.txt *.asc *.art"]
+    elif have("kdialog"):
+        cmd = ["kdialog", "--getopenfilename", str(Path.home()), "*.txt *.asc *.art | ASCII"]
+    else:
+        return ""
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
 def cmd_logo(argv: list[str]) -> int:
     action = argv[0] if argv else "show"
 
@@ -2038,12 +2052,20 @@ def cmd_logo(argv: list[str]) -> int:
         say(t(f"Logo：{logo_description(current_logo())}",
               f"logo: {logo_description(current_logo())}"))
         say(t(f"文件：{LOGO_FILE}", f"file: {LOGO_FILE}"))
-        say(t("可选：nyxdeck logo pick / list / preview / set <名字|文件> / --reset",
-              "use: nyxdeck logo pick / list / preview / set <name|file> / --reset"))
+        say(t("可选：nyxdeck logo pick / file / list / preview / set <名字|文件> / --reset",
+              "use: nyxdeck logo pick / file / list / preview / set <name|file> / --reset"))
         return 0
 
     if action in ("pick", "select"):
         return pick_logo()
+
+    if action in ("file", "choose"):
+        path = pick_logo_file()
+        if not path:
+            say(t("已取消（没有图形文件选择器时用 nyxdeck logo set <绝对路径>）",
+                  "cancelled (without a graphical picker, use nyxdeck logo set <path>)"))
+            return 0
+        return cmd_logo(["set", path])
 
     if action == "list":
         return _fetch_py("--logo-list", argv[1] if len(argv) > 1 else "")
@@ -2061,11 +2083,19 @@ def cmd_logo(argv: list[str]) -> int:
         argv = argv[1:]
     value = " ".join(argv).strip()
     if not value:
-        err(t("用法: nyxdeck logo [show|pick|list [过滤]|preview [名字]|set <名字|文件>|--reset]",
-              "usage: nyxdeck logo [show|pick|list [filter]|preview [name]|set <name|file>|--reset]"))
+        err(t("用法: nyxdeck logo [show|pick|file|list [过滤]|preview [名字]|set <名字|文件>|--reset]",
+              "usage: nyxdeck logo [show|pick|file|list [filter]|preview [name]|set <name|file>|--reset]"))
         return 2
 
-    if value != "default" and not Path(value).expanduser().is_file():
+    if value != "default":
+        path = Path(value).expanduser()
+        if path.is_file():
+            value = str(path.resolve())
+        elif value.startswith(("/", "~", ".")) or "/" in value:
+            err(t(f"没有这个文件：{path}", f"no such file: {path}"))
+            return 1
+
+    if value != "default" and not Path(value).is_file():
         names = _logo_names()
         if names and value not in names:
             near = [n for n in sorted(names) if value.lower() in n.lower()][:6]
@@ -2550,12 +2580,13 @@ def logo_menu() -> None:
         items = [
             t(f"当前：{logo_description(current_logo())}", f"current: {logo_description(current_logo())}"),
             t("选择 Logo（实时预览 / 可过滤）", "pick a logo (live preview, type to filter)"),
-            t("用一个 ASCII 文件", "use an ASCII file"),
+            t("用文件选择器挑一个 ASCII 文件", "choose an ASCII file in a file picker"),
+            t("输入 ASCII 文件的绝对路径", "type the path to an ASCII file"),
             t("恢复系统默认", "restore the system default"),
             t("返回", "Back"),
         ]
         choice = _menu(t("Logo", "Logo"), items)
-        if choice is None or choice == 4:
+        if choice is None or choice == 5:
             return
         clear_screen()
         if choice == 0:
@@ -2563,10 +2594,17 @@ def logo_menu() -> None:
         elif choice == 1:
             pick_logo()
         elif choice == 2:
+            path = pick_logo_file()
+            if path:
+                cmd_logo(["set", path])
+            else:
+                say(t("没有可用的文件选择器，请改用“输入绝对路径”或 nyxdeck logo set <路径>",
+                      "no file picker is available; type the path instead, or run nyxdeck logo set <path>"))
+        elif choice == 3:
             path = _prompt(t("ASCII 文件路径（留空取消）", "path to an ASCII file (empty cancels)"))
             if path:
                 cmd_logo(["set", path])
-        elif choice == 3:
+        elif choice == 4:
             cmd_logo(["--reset"])
         if choice:
             _press_any_key()
@@ -2651,8 +2689,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("clean", help=t("缓存清理（clean-cache.py）", "cache cleaner (clean-cache.py)"))
     sub.add_parser("help", help=t("速查表：命令 + 桌面快捷键 + shell 助手",
                                   "cheatsheet: commands, keybindings, shell helpers"))
-    sub.add_parser("logo", help=t("面板 Logo：pick（实时预览/可过滤）| show | list [过滤] | preview [名字] | set <名字|文件> | --reset",
-                                  "panel logo: pick (live preview, filter) | show | list [filter] | preview [name] | set <name|file> | --reset"))
+    sub.add_parser("logo", help=t("面板 Logo：pick（实时预览/可过滤）| file（文件选择器）| show | list [过滤] | preview [名字] | set <名字|文件> | --reset",
+                                  "panel logo: pick (live preview, filter) | file (file picker) | show | list [filter] | preview [name] | set <name|file> | --reset"))
     sub.add_parser("tagline", help=t("NYX DECK 标语：pick（实时预览）| <文本> | --reset | --blank | show",
                                      "NYX DECK tagline: pick (live preview) | <text> | --reset | --blank | show"))
     sub.add_parser("fetch", help=t("终端欢迎面板（配色跟随壁纸）：[--compact|--native|--install]",

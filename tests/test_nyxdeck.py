@@ -70,6 +70,60 @@ def test_fisher_state_without_a_declaration(nx):
     assert nx._fisher_state() == (0, 0, [])
 
 
+# ── logo ─────────────────────────────────────────────────────────────────────
+
+def test_logo_pick_file_asks_the_installed_dialog(nx, monkeypatch):
+    monkeypatch.setattr(nx, "have", lambda cmd: cmd == "zenity")
+    calls = []
+    monkeypatch.setattr(nx.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or types.SimpleNamespace(
+                            returncode=0, stdout="/tmp/art.txt\n", stderr=""))
+    assert nx.pick_logo_file() == "/tmp/art.txt"
+    assert calls[0][:2] == ["zenity", "--file-selection"]
+
+
+def test_logo_pick_file_prefers_kdialog_when_zenity_is_absent(nx, monkeypatch):
+    monkeypatch.setattr(nx, "have", lambda cmd: cmd == "kdialog")
+    monkeypatch.setattr(nx.subprocess, "run",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr=""))
+    assert nx.pick_logo_file() == ""                      # a cancelled dialog is not an error
+
+
+def test_logo_pick_file_is_quiet_without_a_dialog(nx, monkeypatch):
+    monkeypatch.setattr(nx, "have", lambda cmd: False)
+    monkeypatch.setattr(nx.subprocess, "run", lambda *a, **k: pytest.fail("no dialog to run"))
+    assert nx.pick_logo_file() == ""
+
+
+def test_logo_set_stores_an_absolute_path(nx, tmp_path):
+    art = tmp_path / "logo.asc"
+    art.write_text("x\n", encoding="utf-8")
+    assert nx.cmd_logo(["set", str(art)]) == 0
+    assert nx.current_logo() == str(art.resolve())
+
+
+def test_logo_set_names_a_missing_file_instead_of_a_missing_logo(nx, tmp_path, capsys):
+    missing = tmp_path / "missing.asc"
+    assert nx.cmd_logo(["set", str(missing)]) == 1
+    assert "missing.asc" in capsys.readouterr().out
+    assert nx.current_logo() == ""                        # nothing was stored
+
+
+def test_logo_file_action_stores_what_the_picker_returns(nx, tmp_path, monkeypatch):
+    art = tmp_path / "logo.asc"
+    art.write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(nx, "pick_logo_file", lambda: str(art))
+    assert nx.cmd_logo(["file"]) == 0
+    assert nx.current_logo() == str(art.resolve())
+
+
+def test_logo_file_action_is_harmless_when_cancelled(nx, monkeypatch, capsys):
+    monkeypatch.setattr(nx, "pick_logo_file", lambda: "")
+    assert nx.cmd_logo(["file"]) == 0
+    assert nx.current_logo() == ""
+    assert "nyxdeck logo set" in capsys.readouterr().out
+
+
 # ── niri configuration ───────────────────────────────────────────────────────
 
 def test_niri_binds_reads_the_configuration_in_use(nx):

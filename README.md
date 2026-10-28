@@ -108,6 +108,7 @@ nyxdeck help                   # cheatsheet: commands, keybindings, shell helper
 nyxdeck logo pick              # one screen: choices, live preview, type to filter
 nyxdeck logo [show]            # the panel mark: show | list [filter] | preview [name]
 nyxdeck logo set arch_small    # a built-in fastfetch logo, or a path to an ASCII file
+nyxdeck logo file              # choose an ASCII file in a file picker
 nyxdeck logo --reset           # back to the system default
 nyxdeck tagline pick           # type a tagline, watch the header update
 nyxdeck tagline [text]         # the panel tagline: text | --reset | --blank | show
@@ -162,7 +163,11 @@ underneath, so `esc` cancels; the plain menu is the fallback without fzf).
 `list` prints the names — CachyOS is Arch underneath, so `arch_small` and
 friends are right there — `preview` draws one on its own, `set <name|file>`
 stores it in `~/.config/nyxdeck/logo` and `--reset` returns to the auto-detected
-default. A path to an ASCII file of your own works the same way.
+default. A path to an ASCII file of your own works the same way, and `file`
+opens the desktop's file chooser (zenity or kdialog, when either is installed)
+so it can be picked rather than typed. The interactive panel offers the picker
+next to the "type the path" entry and falls back to typing when neither dialog
+is installed.
 
 Wide art is kept beside the text rather than pushed underneath it: the panel
 uses up to the full terminal width (capped at 140 columns) and elides the
