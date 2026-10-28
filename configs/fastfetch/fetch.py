@@ -29,16 +29,11 @@ from pathlib import Path
 HOME = Path.home()
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
 CACHE_HOME = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local" / "state"))
-
-DMS_SETTINGS = CONFIG_HOME / "DankMaterialShell" / "settings.json"
-DMS_SESSION = STATE_HOME / "DankMaterialShell" / "session.json"
 DMS_COLORS = CACHE_HOME / "DankMaterialShell" / "dms-colors.json"
 TAGLINE_FILE = CONFIG_HOME / "nyxdeck" / "tagline"
 LOGO_FILE = CONFIG_HOME / "nyxdeck" / "logo"
 
 RESET = "\033[0m"
-BOLD = "\033[1m"
 
 # Terminal output is English; NYXDECK_LANG=zh opts into Chinese.
 _LANG = os.environ.get("NYXDECK_LANG", "en").lower()[:2]
@@ -103,11 +98,16 @@ def mix(a, b, ratio: float):
 
 
 def swidth(string: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in string)
+    return sum(2 if unicodedata.category(c) != "Co" and unicodedata.east_asian_width(c) in ("W", "F")
+               else 1 for c in string)
 
 
-def pad_left(string: str, width: int) -> str:
-    return " " * max(0, width - swidth(string)) + string
+def elide(string: str, width: int) -> str:
+    if swidth(string) <= width:
+        return string
+    while string and swidth(string) > width - 1:
+        string = string[:-1]
+    return string + "…" if width > 0 else ""
 
 
 # ── the mark ─────────────────────────────────────────────────────────────────
@@ -278,13 +278,7 @@ def preview_header(text: str) -> int:
     """One header line with `text` as the tagline — the tagline picker's preview."""
     palette = load_palette()
     canvas = Canvas(min(shutil.get_terminal_size((84, 24)).columns, 84))
-    canvas.put(0, 0, "◆", fg=rgb(palette["primary"]), bold=True)
-    canvas.text(0, 2, "NYX DECK", fg=rgb(palette["primary"]), bold=True)
-    if text:
-        canvas.text(0, 11, f"· {text}", fg=rgb(palette["on_surface_variant"]))
-    else:
-        canvas.text(0, 11, t("(标语已隐藏，只留 NYX DECK)", "(tagline hidden; only NYX DECK)"),
-                    fg=rgb(palette["outline_variant"]))
+    draw_header(canvas, palette, 0, 0, canvas.width, text)
     sys.stdout.write(canvas.render() + "\n")
     return 0
 
@@ -331,7 +325,7 @@ class Canvas:
         if not (0 <= col < self.width):
             return col + 1
         self._row(row)[col] = (char, fg, bg, bold)
-        if unicodedata.east_asian_width(char) in ("W", "F") and col + 1 < self.width:
+        if swidth(char) == 2 and col + 1 < self.width:
             self._row(row)[col + 1] = ("", fg, bg, bold)
         return col + swidth(char)
 
@@ -353,7 +347,7 @@ class Canvas:
                 char, fg, bg, bold = cell if cell else (" ", None, None, False)
                 style = (fg, bg, bold)
                 if style != last:
-                    codes = ["1"] if bold else []
+                    codes = ["0", "1"] if bold else ["0"]
                     if fg:
                         codes.append("38;2;%d;%d;%d" % fg)
                     if bg:
@@ -429,7 +423,7 @@ def detect_running() -> tuple[str, str]:
 
 # ── system data ──────────────────────────────────────────────────────────────
 
-STRUCTURE = "OS:Kernel:WM:CPU:GPU:Display:Memory:Disk:Uptime"
+STRUCTURE = "OS:Kernel:Packages:WM:Theme:Icons:Cursor:Font:Host:CPU:GPU:Display:Memory:Disk:Battery:Uptime"
 
 
 def fastfetch_data() -> dict:
@@ -438,7 +432,7 @@ def fastfetch_data() -> dict:
         return {}
     try:
         raw = subprocess.run(
-            [exe, "--format", "json", "--logo", "none", "--structure", STRUCTURE],
+            [exe, "--config", "none", "--format", "json", "--logo", "none", "--structure", STRUCTURE],
             capture_output=True, text=True, timeout=10, check=False,
         ).stdout
         modules = json.loads(raw)
@@ -483,13 +477,6 @@ def os_pretty_name() -> str:
     return "Linux"
 
 
-def read_json(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
 def collect() -> list[tuple[str, list[tuple[str, str, str]]]]:
     data = fastfetch_data()
     terminal, shell = detect_running()
@@ -497,77 +484,92 @@ def collect() -> list[tuple[str, list[tuple[str, str, str]]]]:
     system: list[tuple[str, str, str]] = []
     osinfo = data.get("OS") or {}
     pretty = osinfo.get("prettyName") or osinfo.get("name") or os_pretty_name()
-    system.append(("os", f"{pretty} ({osinfo.get('architecture') or os.uname().machine})", "value"))
+    system.append(("os", f"{pretty} {osinfo.get('architecture') or os.uname().machine}", "value"))
     if (data.get("Kernel") or {}).get("release"):
-        system.append(("kern", data["Kernel"]["release"], "value"))
-    wm = data.get("WM") or {}
-    if wm.get("prettyName"):
-        protocol = wm.get("protocolName")
-        system.append(("wm", f"{wm['prettyName']}{f' ({protocol})' if protocol else ''}", "value"))
-    # Which desktop this is.
-    system.append(("rice", "NyxDeck", "accent"))
-    system.append(("term", terminal, "value"))
+        system.append(("kern", f"{data['Kernel'].get('name') or 'Linux'} {data['Kernel']['release']}", "value"))
+    packages = data.get("Packages") or {}
+    counts = [f"{count} ({name})" for name, count in packages.items()
+              if name != "all" and isinstance(count, int) and count > 0]
+    if counts:
+        system.append(("pkg", ", ".join(counts), "value"))
     system.append(("sh", shell, "value"))
 
     desktop: list[tuple[str, str, str]] = []
-    settings = read_json(DMS_SETTINGS)
-    colours = read_json(DMS_COLORS)
-    theme = settings.get("currentThemeName") or "?"
-    desktop.append(("theme", f"{theme} · {colours.get('mode') or 'dark'}", "accent"))
-    wallpaper = read_json(DMS_SESSION).get("wallpaperPath") or ""
-    if wallpaper:
-        desktop.append(("wall", Path(wallpaper).name, "value"))
-    state = service_state("mihomo.service")
-    if state:
-        desktop.append(("proxy", state, "accent" if state == "active" else "muted"))
+    wm = data.get("WM") or {}
+    if wm.get("prettyName"):
+        protocol = wm.get("protocolName")
+        name = " ".join(filter(None, (wm["prettyName"], wm.get("version"))))
+        desktop.append(("wm", f"{name}{f' ({protocol})' if protocol else ''}", "value"))
+    else:
+        desktop.append(("wm", "NyxDeck", "value"))
+    for module, key, fields in (
+        ("Theme", "theme", ("theme1", "theme2")),
+        ("Icons", "icons", ("icons1", "icons2")),
+        ("Cursor", "cursor", ("theme",)),
+        ("Font", "font", ("display",)),
+    ):
+        result = data.get(module) or {}
+        value = ", ".join(result[field] for field in fields if result.get(field))
+        if key == "cursor" and result.get("size"):
+            value += f" ({result['size']}px)"
+        if value:
+            desktop.append((key, value, "value"))
+    desktop.append(("term", terminal, "value"))
 
     hardware: list[tuple[str, str, str]] = []
+    host = data.get("Host") or {}
+    host_name = host.get("name") or os.uname().nodename
+    if host.get("version"):
+        host_name += f" ({host['version']})"
+    hardware.append(("host", host_name, "value"))
+    for display in data.get("Display") or []:
+        out = display.get("output") or {}
+        if out.get("width"):
+            hardware.append(("disp", f"{out['width']}×{out['height']} @ {round(out.get('refreshRate') or 0)}Hz", "value"))
     cpu = data.get("CPU") or {}
     if cpu.get("cpu"):
         cores = (cpu.get("cores") or {}).get("logical")
-        hardware.append(("cpu", cpu["cpu"] + (f" · {cores}c" if cores else ""), "value"))
-    gpus = data.get("GPU") or []
-    if gpus and gpus[0].get("name"):
-        hardware.append(("gpu", gpus[0]["name"], "value"))
-    displays = data.get("Display") or []
-    if displays and (displays[0].get("output") or {}).get("width"):
-        out = displays[0]["output"]
-        hardware.append(("disp", f"{out['width']}x{out['height']} @{round(out.get('refreshRate') or 0)}Hz", "value"))
+        frequency = (cpu.get("frequency") or {}).get("max")
+        value = cpu["cpu"] + (f" ({cores})" if cores else "")
+        if frequency:
+            value += f" @ {frequency / 1000:.2f} GHz"
+        hardware.append(("cpu", value, "value"))
+    for gpu in data.get("GPU") or []:
+        if gpu.get("name"):
+            hardware.append(("gpu", gpu["name"], "value"))
     memory = data.get("Memory") or {}
     if memory.get("total"):
         used, total = memory.get("used", 0), memory["total"]
         hardware.append(("mem", f"{human_gib(used)} / {human_gib(total)} ({round(used / total * 100)}%)", "accent"))
-    for disk in data.get("Disk") or []:
+    disks = data.get("Disk") or []
+    disks = sorted(disks, key=lambda disk: disk.get("mountpoint") != "/")
+    for disk in disks:
         sizes = disk.get("bytes") or {}
         if sizes.get("total") and (disk.get("mountpoint") == "/" or not any(k == "disk" for k, _, _ in hardware)):
-            used = sizes.get("used", 0)
-            hardware.append(("disk", f"{human_gib(used)} / {human_gib(sizes['total'])} ({round(used / sizes['total'] * 100)}%)", "value"))
+            used = sizes.get("used")
+            if used is None:
+                if sizes.get("free") is None:
+                    continue
+                used = sizes["total"] - sizes["free"]
+            filesystem = f" - {disk['filesystem']}" if disk.get("filesystem") else ""
+            hardware.append(("disk", f"{human_gib(used)} / {human_gib(sizes['total'])} ({round(used / sizes['total'] * 100)}%){filesystem}", "value"))
             break
+    for battery in data.get("Battery") or []:
+        if battery.get("capacity") is not None:
+            status = f" [{battery['status']}]" if battery.get("status") else ""
+            hardware.append(("bat", f"{battery['capacity']:g}%{status}", "accent"))
     if (data.get("Uptime") or {}).get("uptime") is not None:
         hardware.append(("up", human_duration(data["Uptime"]["uptime"]), "value"))
 
     return [
-        (t("系统", "system"), system),
-        ("nyxdeck", desktop),
-        (t("硬件", "hardware"), hardware),
+        (t("发行版", "Distro"), system),
+        ("DE/WM", desktop),
+        (t("设备", "System"), hardware),
     ]
-
-
-def service_state(unit: str) -> str:
-    if not shutil.which("systemctl"):
-        return ""
-    try:
-        return subprocess.run(
-            ["systemctl", "is-active", unit], capture_output=True, text=True,
-            timeout=3, check=False,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
 
 
 # ── drawing ──────────────────────────────────────────────────────────────────
 
-# Fallback mark, used only when fastfetch is unavailable.
 MARK = [
     "   ▄▄▄▄▄",
     " ▄██▀▀▀",
@@ -589,6 +591,26 @@ def ramp(palette: dict) -> list[tuple[int, int, int]]:
     return out
 
 
+ICONS = {
+    "os": "", "kern": "", "pkg": "󰏖", "sh": "", "wm": "",
+    "theme": "󰉼", "icons": "", "cursor": "󰇀", "font": "", "term": "",
+    "host": "", "disp": "󰍹", "cpu": "", "gpu": "󰢮", "mem": "",
+    "disk": "󰋊", "bat": "󰁹", "up": "󰔟",
+}
+
+
+def draw_header(canvas: Canvas, palette: dict, row: int, col: int, width: int, slogan: str) -> None:
+    title = elide(f"NyxDeck · {os_pretty_name()}", width)
+    split = min(len("NyxDeck"), len(title))
+    end = canvas.text(row, col, title[:split], fg=rgb(palette["tertiary"]), bold=True)
+    canvas.text(row, end, title[split:], fg=rgb(palette["primary"]), bold=True)
+    canvas.text(row + 1, col, "─" * swidth(title), fg=rgb(palette["on_surface_variant"]))
+    room = width - swidth(title) - 3
+    if slogan and room >= 12:
+        canvas.text(row, col + swidth(title) + 3, elide(slogan, room),
+                    fg=rgb(palette["on_surface_variant"]))
+
+
 class Panel:
     def __init__(self, palette: dict, width: int, mark: bool) -> None:
         self.p = palette
@@ -598,7 +620,6 @@ class Panel:
         self.logo = distro_logo(palette) if mark else []
 
     def mark_rows(self) -> list:
-        """The mark as rows of (char, colour): the chosen logo, or the fallback."""
         if self.logo:
             return self.logo
         if not self.mark:
@@ -607,100 +628,73 @@ class Panel:
         return [[(char, colours[min(index, len(colours) - 1)]) for char in line.rstrip()]
                 for index, line in enumerate(MARK)]
 
-    def heading(self, row: int, col: int, label: str) -> None:
-        """Section label: the accent colour and weight only. A filled block
-        behind it reads as a halo on a translucent terminal."""
-        self.c.text(row, col, label, fg=rgb(self.p["primary"]), bold=True)
-
     def draw(self, sections) -> None:
-        """Lay the block out the way the rice it replaces did: one column of
-        sections, the mark beside it, the whole thing centred instead of glued
-        to the left edge."""
         p = self.p
         entries = [(title, rows) for title, rows in sections if rows]
-        key_w = min(max((len(key) for _, rows in entries for key, _, _ in rows), default=6), 8)
         value_w = max((swidth(value) for _, rows in entries for _, value, _ in rows), default=12)
-        label_w = max((swidth(title) for title, _ in entries), default=6)
-        info_w = max(key_w + 2 + value_w, label_w) + 1
-
+        key_w = max((swidth(title) for title, _ in entries), default=6) + 3
+        value_offset = key_w + 3
+        info_w = max(value_offset + value_w + 1, 40)
         rows = self.mark_rows()
         logo_w = max((swidth("".join(char for char, _ in row)) for row in rows), default=0)
         gap = 3 if logo_w else 0
-
-        # Try to keep the mark beside the text: stacking pushes the whole info
-        # block under the logo and makes the panel as tall as both.
-        min_info = 26
         stacked = False
         if logo_w:
             room = self.width - logo_w - gap - 2
             if room < info_w:
-                if room >= min_info:
-                    info_w = room          # elide the long values instead
+                if room >= 26:
+                    info_w = room
                 elif logo_w + 2 <= self.width:
                     stacked = True
                     gap = 0
                 else:
-                    rows, logo_w = [], 0
-
+                    rows, logo_w, gap = [], 0, 0
+        info_w = min(info_w, self.width - 2)
         content = info_w if stacked else logo_w + gap + info_w
         pad = max(1, min(6, (self.width - content - 1) // 2))
         info_col = pad if stacked else pad + logo_w + gap
+        top, body = 2, 5
+        if stacked:
+            for index, logo_row in enumerate(rows):
+                offset = pad + max(0, (info_w - swidth("".join(c for c, _ in logo_row))) // 2)
+                column = offset
+                for char, colour in logo_row:
+                    column = self.c.put(top + index, column, char, fg=colour or rgb(p["primary"]))
+            top += len(rows) + 1
+            body = top + 3
+        elif rows:
+            for index, logo_row in enumerate(rows):
+                column = pad
+                for char, colour in logo_row:
+                    column = self.c.put(body + index, column, char, fg=colour or rgb(p["primary"]))
 
-        top = 2
-        # Header sits with the text column, not out on its own.
-        self.c.put(top, info_col, "◆", fg=rgb(p["primary"]), bold=True)
-        self.c.text(top, info_col + 2, "NYX DECK", fg=rgb(p["primary"]), bold=True)
-        slogan = tagline()
-        room = self.width - (info_col + 11) - 1
-        if slogan and swidth(slogan) > room:
-            while slogan and swidth(slogan) > room - 1:
-                slogan = slogan[:-1]
-            slogan += "…"
-        if slogan:
-            self.c.text(top, info_col + 11, f"· {slogan}", fg=rgb(p["on_surface_variant"]))
+        draw_header(self.c, p, top, info_col, info_w, tagline())
 
-        body = top + 2
-        if rows:
-            if stacked:
-                for index, row in enumerate(rows):
-                    width = swidth("".join(char for char, _ in row))
-                    offset = pad + max(0, (info_w - width) // 2)
-                    for column, (char, colour) in enumerate(row):
-                        if char != " ":
-                            self.c.put(body + index, offset + column, char,
-                                       fg=colour or rgb(p["primary"]))
-                body += len(rows) + 1
-            else:
-                # Top-aligned with the text, the way a fetch normally reads;
-                # centring it left equal blanks above and below.
-                for index, row in enumerate(rows):
-                    for column, (char, colour) in enumerate(row):
-                        if char != " ":
-                            self.c.put(body + index, pad + column, char,
-                                       fg=colour or rgb(p["primary"]))
-
-        value_col = info_col + key_w + 2
+        value_col = info_col + value_offset
         row = body
-        for title, rows in entries:
-            self.heading(row, info_col, title)
-            row += 1
-            for key, value, style in rows:
-                self.c.text(row, info_col, pad_left(key, key_w), fg=rgb(p["on_surface_variant"]))
-                colour = {
-                    "accent": rgb(p["tertiary"]),
-                    "muted": rgb(p["on_surface_variant"]),
-                }.get(style, rgb(p["on_surface"]))
-                room = info_w - (value_col - info_col) - 1
-                if swidth(value) > room:
-                    if room > 1:
-                        while value and swidth(value) > room - 1:
-                            value = value[:-1]
-                        value += "…"
-                    else:
-                        value = value[:room]
-                self.c.text(row, value_col, value, fg=colour)
+        for (title, section), role in zip(entries, ("tertiary", "secondary", "primary")):
+            accent = rgb(p[role])
+            for index, (key, value, _) in enumerate(section):
+                if index == 0:
+                    label = f"{ICONS.get(key, '•')}  {title}"
+                else:
+                    label = f"  {'└' if index == len(section) - 1 else '├'}─{ICONS.get(key, '•')}"
+                self.c.text(row, info_col, label, fg=accent, bold=index == 0)
+                self.c.text(row, info_col + key_w, " ↔ ", fg=rgb(p["on_surface_variant"]))
+                self.c.text(row, value_col, elide(value, info_w - value_offset - 1),
+                            fg=rgb(p["on_surface"]))
                 row += 1
             row += 1
+        swatches = [rgb(p.get(role, FALLBACK_PALETTE[role])) for role in (
+            "surface_container_high", "error", "tertiary", "primary", "secondary",
+            "on_surface_variant", "on_surface", "primary_container",
+        )]
+        swatch_w = min(5, max(1, (info_w - 2) // len(swatches)))
+        swatch_col = info_col + max(0, (info_w - swatch_w * len(swatches)) // 2)
+        for level in range(2):
+            for index, colour in enumerate(swatches):
+                colour = mix(colour, (255, 255, 255), 0.2) if level else colour
+                self.c.text(row + level, swatch_col + index * swatch_w, " " * swatch_w, bg=colour)
 
 # ── native fastfetch fallback ────────────────────────────────────────────────
 
@@ -709,6 +703,8 @@ def native_config(palette: dict) -> str:
     def fg(role: str) -> str:
         return "38;2;%d;%d;%d" % rgb(palette[role])
 
+    terminal, shell = detect_running()
+    title = f"NyxDeck · {os_pretty_name()}"
     return json.dumps(
         {
             "logo": {
@@ -716,23 +712,34 @@ def native_config(palette: dict) -> str:
                 "color": {str(k): fg(v) for k, v in LOGO_ROLES.items()},
                 "padding": {"top": 1, "left": 2, "right": 4},
             },
-            "display": {"separator": "  ", "color": {"keys": fg("on_surface_variant"), "title": fg("primary")}},
+            "display": {"separator": " ↔ ", "key": {"width": 12},
+                        "color": {"keys": fg("primary"), "title": fg("primary"), "output": fg("on_surface")}},
             "modules": [
-                {"type": "custom", "format": ""},
-                {"type": "custom", "format": f"{{#{fg('primary')}}}NYX DECK{{#}}"},
-                {"type": "custom", "format": ""},
-                {"type": "custom", "format": f"{{#{fg('primary')}}}system{{#}}"},
-                {"type": "os", "key": "  os   ", "format": "{3} ({12})"},
-                {"type": "kernel", "key": "  kern ", "format": "{2}"},
-                {"type": "wm", "key": "  wm   ", "format": "{1} ({3})"},
-                {"type": "custom", "format": ""},
-                {"type": "custom", "format": f"{{#{fg('primary')}}}hardware{{#}}"},
-                {"type": "cpu", "key": "  cpu  ", "format": "{1}"},
-                {"type": "gpu", "key": "  gpu  ", "format": "{2}"},
-                {"type": "display", "key": "  disp ", "format": "{width}x{height} @{refresh-rate}Hz"},
-                {"type": "memory", "key": "  mem  ", "format": "{1} / {2} ({3})"},
-                {"type": "disk", "key": "  disk ", "folders": "/", "format": "{1} / {2} ({3})"},
-                {"type": "uptime", "key": "  up   ", "format": "{?days}{days}d {?}{hours}h {minutes}m"},
+                "break",
+                {"type": "custom", "format": f"{{#{fg('primary')}}}{title}{{#}}"},
+                {"type": "custom", "format": "─" * swidth(title)},
+                "break",
+                {"type": "os", "key": "  Distro", "keyColor": fg("tertiary")},
+                {"type": "kernel", "key": "  ├─", "keyColor": fg("tertiary")},
+                {"type": "packages", "key": "  ├─󰏖", "keyColor": fg("tertiary")},
+                {"type": "custom", "key": "  └─", "keyColor": fg("tertiary"), "format": shell},
+                "break",
+                {"type": "wm", "key": "  DE/WM", "keyColor": fg("secondary")},
+                {"type": "theme", "key": "  ├─󰉼", "keyColor": fg("secondary")},
+                {"type": "icons", "key": "  ├─", "keyColor": fg("secondary")},
+                {"type": "cursor", "key": "  ├─󰇀", "keyColor": fg("secondary")},
+                {"type": "font", "key": "  ├─", "keyColor": fg("secondary")},
+                {"type": "custom", "key": "  └─", "keyColor": fg("secondary"), "format": terminal},
+                "break",
+                {"type": "custom", "key": "  System", "format": os.uname().nodename},
+                {"type": "display", "key": "  ├─󰍹"},
+                {"type": "cpu", "key": "  ├─"},
+                {"type": "gpu", "key": "  ├─󰢮"},
+                {"type": "memory", "key": "  ├─"},
+                {"type": "disk", "key": "  ├─󰋊", "folders": "/"},
+                {"type": "battery", "key": "  ├─󰁹"},
+                {"type": "uptime", "key": "  └─󰔟"},
+                "break", {"type": "colors", "symbol": "block"},
             ],
         },
         indent=4,
@@ -758,7 +765,7 @@ def run_native(palette: dict, install: bool) -> int:
     try:
         config = scratch / "config.jsonc"
         scratch.mkdir(parents=True, exist_ok=True)
-        config.write_text(native_config(palette, scratch), encoding="utf-8")
+        config.write_text(native_config(palette), encoding="utf-8")
         return subprocess.run([exe, "-c", str(config)]).returncode
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -791,7 +798,7 @@ def main() -> int:
     if args.native or args.install:
         return run_native(palette, args.install)
 
-    width = max(args.width or min(shutil.get_terminal_size((90, 24)).columns, 100), 40)
+    width = max(args.width or min(shutil.get_terminal_size((90, 24)).columns, 140), 40)
     mark = not (args.compact or args.no_logo) and width >= 64
     panel = Panel(palette, width, mark)
     panel.draw(collect())

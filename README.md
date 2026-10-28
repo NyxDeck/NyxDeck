@@ -110,7 +110,7 @@ nyxdeck logo [show]            # the panel mark: show | list [filter] | preview 
 nyxdeck logo set arch_small    # a built-in fastfetch logo, or a path to an ASCII file
 nyxdeck logo --reset           # back to the system default
 nyxdeck tagline pick           # type a tagline, watch the header update
-nyxdeck tagline [text]         # the NYX DECK tagline: text | --reset | --blank | show
+nyxdeck tagline [text]         # the panel tagline: text | --reset | --blank | show
 nyxdeck fetch                  # terminal welcome panel (colours follow the wallpaper)
 nyxdeck fetch --compact        # no mark
 nyxdeck fetch --native         # hand off to fastfetch with a generated config
@@ -141,17 +141,14 @@ Reinstall a broken directory with `nyxdeck plugin install <id> --force`.
 
 ### Terminal panel
 
-`nyxdeck fetch` replaces the ad-hoc fastfetch configuration that came before it. It draws a
-Material 3 Expressive panel — accent-coloured section labels, the
-distribution's own logo art, and a tonal swatch row — from the palette DMS
-generated for the current wallpaper, with `fastfetch --format json` supplying
-the machine data.
-Nothing is hard-coded, so the panel changes with the wallpaper like the bar,
-the terminal and starship do.
-
-A `rice  NyxDeck` row credits the desktop. Section
-labels carry no background block, which would read as a halo on a translucent
-terminal.
+`nyxdeck fetch` draws the distribution's logo beside a tree-style information
+column. Its three groups are **Distro** (OS, kernel, packages, shell), **DE/WM**
+(window manager, theme, icons, cursor, font, terminal), and **System** (host,
+displays, CPU, GPUs, memory, root disk, battery when present, uptime).
+Nerd Font icons and branch lines identify the rows; each group uses a different
+accent from the palette DMS generated for the current wallpaper. Two rows of
+tonal swatches finish the column. `fastfetch --format json` supplies the data.
+Labels carry no background block, keeping translucent terminals clean.
 
 The mark defaults to fastfetch's built-in logo for the detected distribution
 (official distro art, so it looks as deliberate as the distro's own),
@@ -168,7 +165,7 @@ stores it in `~/.config/nyxdeck/logo` and `--reset` returns to the auto-detected
 default. A path to an ASCII file of your own works the same way.
 
 Wide art is kept beside the text rather than pushed underneath it: the panel
-uses up to the full terminal width (capped at 100 columns) and elides the
+uses up to the full terminal width (capped at 140 columns) and elides the
 longest values with `…` so the columns still fit. Only when that would leave the
 text column narrower than 26 cells — `CachyOS` (54 wide) on an 84-column
 terminal — does it stack the logo above, centred, and only a logo wider than the
@@ -177,10 +174,12 @@ terminal itself is dropped.
 The tagline has the same shape: `nyxdeck tagline pick` is a prompt whose preview
 redraws the header as you type, with a few suggestions listed.
 
-The header reads `◆ NYX DECK · <tagline>`. The tagline defaults to the
+The header reads `NyxDeck · <OS name>` with an underline. The OS name is read
+from `/etc/os-release`. The tagline appears beside
+it when there is enough room and defaults to the
 localised "a self-contained desktop" / 自足的桌面 and is overridable with
 `nyxdeck tagline <text>` (also in the interactive panel), `--reset` restores
-the default and `--blank` drops the tagline so only `NYX DECK` remains. It is
+the default and `--blank` drops the tagline so only `NyxDeck · <OS name>` remains. It is
 stored in `~/.config/nyxdeck/tagline`.
 
 The panel is English; `NYXDECK_LANG=zh` switches it. Terminal and shell are

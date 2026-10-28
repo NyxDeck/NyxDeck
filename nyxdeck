@@ -1939,8 +1939,8 @@ def cmd_tagline(argv: list[str]) -> int:
 
     if action in ("--blank", "blank", "hide", "none"):
         set_tagline("")
-        ok(t("标语已隐藏（面板表头只留 NYX DECK）",
-             "tagline hidden (the header keeps only NYX DECK)"))
+        ok(t("标语已隐藏（面板表头只留 NyxDeck · 操作系统名）",
+             "tagline hidden (the header keeps only NyxDeck · OS name)"))
         return 0
 
     text = " ".join(argv).strip()
